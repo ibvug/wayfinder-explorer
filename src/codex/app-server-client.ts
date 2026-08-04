@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 
 import type { InitializeParams } from "../../schemas/codex-app-server/InitializeParams.ts";
@@ -181,10 +182,7 @@ export class CodexAppServerClient {
     this.#stderrDiagnostics = "";
     const child = this.#options.spawnProcess
       ? this.#options.spawnProcess()
-      : spawn(this.#options.command ?? "codex", this.#options.args ?? ["app-server"], {
-          cwd: this.#options.cwd,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+      : spawnAppServer(this.#options);
     this.#child = child;
     this.#reader = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY });
     this.#reader.on("line", (line) => this.#receiveLine(child, line));
@@ -370,4 +368,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRequestId(value: unknown): value is RequestId {
   return typeof value === "string" || typeof value === "number";
+}
+
+function spawnAppServer(options: AppServerClientOptions): ChildProcessWithoutNullStreams {
+  const command = options.command ?? "codex";
+  const args = options.args ?? ["app-server"];
+  const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
+  const spawnOptions = {
+    cwd: options.cwd,
+    stdio,
+    windowsHide: true,
+  };
+
+  if (requiresWindowsCommandProcessor(command)) {
+    const shellCommand = [command, ...args].map(quoteWindowsShellToken).join(" ");
+    return spawn(shellCommand, {
+      ...spawnOptions,
+      shell: process.env.ComSpec ?? true,
+    });
+  }
+  return spawn(command, args, spawnOptions);
+}
+
+function requiresWindowsCommandProcessor(command: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const extension = path.extname(command).toLowerCase();
+  return extension === "" || extension === ".bat" || extension === ".cmd";
+}
+
+function quoteWindowsShellToken(value: string): string {
+  if (!/[\s&|<>()^"]/u.test(value)) {
+    return value;
+  }
+  return `"${value.replaceAll('"', '""')}"`;
 }
