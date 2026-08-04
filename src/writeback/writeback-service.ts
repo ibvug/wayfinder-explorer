@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+import { fsyncDirectory } from "../durability.ts";
 import type { CampaignProjection, Location } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
 import type {
@@ -645,15 +646,6 @@ async function writeAtomicReplacement(
   await unlink(temporaryPath).catch(ignoreMissing);
   await writeDurableFile(temporaryPath, bytes, mode, true);
   await rename(temporaryPath, targetPath);
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 function parseJournal(text: string, campaignId: string): RecoveryJournal {

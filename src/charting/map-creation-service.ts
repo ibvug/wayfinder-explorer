@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { fsyncDirectory } from "../durability.ts";
 import type { CampaignProjection, LocationType } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
 import { inspectCampaignAs } from "../wayfinder.ts";
@@ -637,15 +638,6 @@ async function writeJournalDurably(targetPath: string, journal: CreationJournal)
   );
   await rename(temporaryPath, targetPath);
   await fsyncDirectory(path.dirname(targetPath));
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 function parseJournal(text: string, campaignId: string): CreationJournal {
