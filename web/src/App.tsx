@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type ReactNode,
 } from "react";
 
 import type {
@@ -24,6 +23,7 @@ import type {
   CampaignProjectView,
 } from "../../src/project/model.ts";
 import { JourneyLog } from "./JourneyLog.tsx";
+import { MarkdownText } from "./MarkdownText.ts";
 import { MapWorld } from "./MapWorld.tsx";
 import type { ConnectionState, ExpeditionActions, Selection } from "./app-types.ts";
 import { useCampaign } from "./use-campaign.ts";
@@ -516,12 +516,12 @@ function ChartingPanel({
             {charting.messages.map((message) => (
               <article className={`expedition-message expedition-message--${message.role}`} key={message.id}>
                 <span>{message.role === "guide" ? "CODEX" : "你"}</span>
-                <p>{message.text}</p>
+                <MarkdownText markdown={message.text} />
               </article>
             ))}
             {charting.streamingMessage ? (
               <article className="expedition-message expedition-message--guide is-streaming">
-                <span>CODEX</span><p>{charting.streamingMessage.text}<i aria-hidden="true" /></p>
+                <span>CODEX</span><MarkdownText markdown={charting.streamingMessage.text} streaming />
               </article>
             ) : null}
             {(charting.state === "exploring" || charting.state === "reconciling" || charting.state === "returning") &&
@@ -1036,13 +1036,13 @@ function ExpeditionPanel({
                 key={message.id}
               >
                 <span>{message.role === "guide" ? "CODEX" : "你"}</span>
-                <p>{message.text}</p>
+                <MarkdownText markdown={message.text} />
               </article>
             ))}
             {expedition.streamingMessage ? (
               <article className="expedition-message expedition-message--guide is-streaming">
                 <span>CODEX</span>
-                <p>{expedition.streamingMessage.text}<i aria-hidden="true" /></p>
+                <MarkdownText markdown={expedition.streamingMessage.text} streaming />
               </article>
             ) : null}
             {(expedition.state === "exploring" || expedition.state === "reconciling" || expedition.state === "returning") &&
@@ -1323,37 +1323,6 @@ function FogPanel({ campaign }: { campaign: CampaignProjection }) {
       </ol>
     </article>
   );
-}
-
-function MarkdownText({ markdown }: { markdown: string }) {
-  const blocks = markdown.split(/\n{2,}/).filter(Boolean);
-  return (
-    <div className="markdown-text">
-      {blocks.map((block, index) => {
-        if (block.startsWith("### ")) {
-          return <h4 key={index}>{renderInline(block.slice(4))}</h4>;
-        }
-        return <p key={index}>{renderInline(block)}</p>;
-      })}
-    </div>
-  );
-}
-
-function renderInline(text: string): ReactNode[] {
-  const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g);
-  return tokens.map((token, index) => {
-    if (token.startsWith("**") && token.endsWith("**")) {
-      return <strong key={index}>{token.slice(2, -2)}</strong>;
-    }
-    if (token.startsWith("`") && token.endsWith("`")) {
-      return <code key={index}>{token.slice(1, -1)}</code>;
-    }
-    const link = /^\[([^\]]+)\]\([^)]+\)$/.exec(token);
-    if (link) {
-      return <span className="text-reference" key={index}>{link[1]}</span>;
-    }
-    return token;
-  });
 }
 
 function StatusSigil({ status }: { status: Location["status"] }) {
