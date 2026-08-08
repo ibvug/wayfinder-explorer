@@ -370,6 +370,8 @@ function validateProposal(proposal: MapProposal): void {
   const content: MapProposalContent = {
     title: proposal.title,
     destination: proposal.destination,
+    startingState: proposal.startingState,
+    evidenceScope: proposal.evidenceScope,
     notes: proposal.notes,
     tickets: proposal.tickets,
     fog: proposal.fog,
@@ -398,6 +400,13 @@ function renderMapFiles(proposal: MapProposal): RenderedFile[] {
     "",
     proposal.destination,
     "",
+    "## Starting state",
+    "",
+    proposal.startingState,
+    "",
+    "## Evidence scope",
+    "",
+    renderBullets(proposal.evidenceScope),
     "## Notes",
     "",
     renderBullets(proposal.notes),
@@ -484,9 +493,6 @@ function assertValidFirstMap(
   }
   if (campaign.locations.length !== proposal.tickets.length || campaign.summary.resolved !== 0) {
     throw new MapCreationError(409, "首张地图草案意外改变了 ticket 数量或预先解决了 ticket。 ");
-  }
-  if (campaign.summary.frontier < 2) {
-    throw new MapCreationError(409, "首张地图必须提供至少两个当前可选的 frontier。 ");
   }
   if (rendered.length !== proposal.tickets.length + 1) {
     throw new MapCreationError(409, "首张地图没有为每个 ticket 生成唯一 issue。 ");

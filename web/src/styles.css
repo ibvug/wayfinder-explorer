@@ -286,6 +286,96 @@ button:focus-visible {
   letter-spacing: 0.025em;
 }
 
+.rechart-banner {
+  position: relative;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 9px 28px;
+  border-bottom: 1px solid rgba(233, 169, 74, 0.24);
+  background: rgba(77, 55, 22, 0.55);
+  color: #e3bf82;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.rechart-banner button {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid rgba(233, 169, 74, 0.4);
+  border-radius: 4px;
+  background: rgba(233, 169, 74, 0.09);
+  cursor: pointer;
+}
+
+.tool-approval,
+.review-pending-block,
+.pending-deletion-block,
+.rechart-change-block {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(233, 169, 74, 0.24);
+  border-radius: 4px;
+  background: rgba(80, 57, 23, 0.18);
+}
+
+.rechart-change-block button {
+  margin-top: 10px;
+}
+
+.expedition-ending {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(233, 169, 74, 0.24);
+  border-radius: 4px;
+  background: rgba(80, 57, 23, 0.18);
+  color: #d9c39c;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.expedition-end-button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(185, 131, 100, 0.28);
+  border-radius: 4px;
+  background: transparent;
+  color: #bfa691;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.tool-approval h4 {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.tool-approval ul {
+  margin: 10px 0;
+  padding-left: 18px;
+}
+
+.tool-approval code {
+  overflow-wrap: anywhere;
+  color: #d9c39c;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.answer-history {
+  margin-top: 14px;
+  color: var(--muted);
+}
+
+.answer-history article {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.94fr) minmax(350px, 0.96fr);
@@ -415,6 +505,11 @@ button:focus-visible {
   stroke-width: 1.8;
 }
 
+.route--determined {
+  stroke: rgba(95, 170, 160, 0.72);
+  stroke-width: 1.9;
+}
+
 .route--trail::after {
   content: "";
 }
@@ -454,6 +549,74 @@ button:focus-visible {
 
 @keyframes current-route {
   to { stroke-dashoffset: -130; }
+}
+
+.start-landmark {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transform: translate(-50%, -50%);
+}
+
+.start-landmark__marker {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(95, 170, 160, 0.75);
+  border-radius: 50%;
+  background: #0b1a1b;
+  color: var(--trail-bright);
+  font-size: 17px;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.start-landmark__label {
+  position: absolute;
+  top: 67px;
+  color: #83aaa3;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.17em;
+}
+
+.start-landmark__tooltip {
+  position: absolute;
+  bottom: 70px;
+  left: 50%;
+  z-index: 20;
+  width: 230px;
+  padding: 8px 10px;
+  border: 1px solid rgba(132, 178, 168, 0.18);
+  border-radius: 3px;
+  background: rgba(8, 20, 22, 0.96);
+  color: #bdcec9;
+  font-size: 10px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.start-landmark:hover .start-landmark__marker,
+.start-landmark.is-selected .start-landmark__marker {
+  border-color: #c3d7d2;
+  box-shadow: 0 0 0 8px rgba(95, 170, 160, 0.08), 0 0 24px rgba(95, 170, 160, 0.18);
+}
+
+.start-landmark:hover .start-landmark__tooltip,
+.start-landmark:focus-visible .start-landmark__tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .map-node {
@@ -537,6 +700,32 @@ button:focus-visible {
 .map-node--blocked .map-node__id {
   color: #657b80;
   transform: rotate(-45deg);
+}
+
+.issue-marker .map-node__marker {
+  border-style: dashed;
+}
+
+.issue-marker::before {
+  position: absolute;
+  inset: 10px;
+  border: 1px dashed rgba(120, 148, 144, 0.16);
+  border-radius: 50%;
+  content: "";
+}
+
+.issue-marker.map-node--blocked::before {
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.issue-marker--pending-delete {
+  opacity: 0.62;
+}
+
+.issue-marker--pending-delete .map-node__marker {
+  border-color: var(--danger);
+  text-decoration: line-through;
 }
 
 .map-node:hover .map-node__marker,
@@ -668,6 +857,19 @@ button:focus-visible {
 .destination-landmark.is-selected .destination-landmark__rings {
   border-color: var(--amber-pale);
   box-shadow: 0 0 0 10px rgba(233, 169, 74, 0.055), 0 0 35px rgba(202, 157, 77, 0.14);
+}
+
+.destination-landmark--arrived .destination-landmark__rings {
+  border-color: var(--amber-pale);
+  box-shadow: 0 0 0 12px rgba(233, 169, 74, 0.07), 0 0 42px rgba(202, 157, 77, 0.24);
+}
+
+.destination-landmark--arrived .destination-landmark__label::after {
+  display: block;
+  margin-top: 5px;
+  color: var(--amber-pale);
+  content: "已抵达";
+  letter-spacing: 0.12em;
 }
 
 .fog-entrance {

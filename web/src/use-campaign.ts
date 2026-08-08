@@ -210,6 +210,21 @@ export function useCampaign(): CampaignResource {
       `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/interrupt`,
       {},
     ),
+    retryRechart: (chartingId) => postCharting(
+      `charting:${chartingId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/rechart/retry`,
+      {},
+    ),
+    restoreRechartChange: (chartingId, changeId, locationId) => postCharting(
+      `charting:${chartingId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/rechart-changes/${encodeURIComponent(changeId)}/restore`,
+      { locationId },
+    ),
+    resolveChartingApproval: (chartingId, approvalId, decision) => postCharting(
+      `charting:${chartingId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/approvals/${encodeURIComponent(approvalId)}`,
+      { decision },
+    ),
     setPlayerFocus: (locationId) => postProject(
       `focus:${locationId}`,
       `${bootstrapRef.current?.apiRoot ?? "/api"}/player-focus`,
@@ -278,6 +293,16 @@ export function useCampaign(): CampaignResource {
       `expedition:${expeditionId}`,
       `${bootstrapRef.current?.apiRoot ?? "/api"}/expeditions/${encodeURIComponent(expeditionId)}/interrupt`,
       {},
+    ),
+    endExpedition: (expeditionId) => postExpedition(
+      `expedition:${expeditionId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/expeditions/${encodeURIComponent(expeditionId)}/end`,
+      {},
+    ),
+    resolveExpeditionApproval: (expeditionId, approvalId, decision) => postExpedition(
+      `expedition:${expeditionId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/expeditions/${encodeURIComponent(expeditionId)}/approvals/${encodeURIComponent(approvalId)}`,
+      { decision },
     ),
     clearError: () => setActionState(),
   }), [postCharting, postExpedition, postProject, resource.actionBusyTarget, resource.actionError, selectDirectory, setActionState]);

@@ -9,6 +9,7 @@ export type ExpeditionState =
   | "returned"
   | "drafted"
   | "previewing"
+  | "ending"
   | "confirmed"
   | "abandoned"
   | "orphaned";
@@ -61,6 +62,7 @@ export interface WritebackPlanView {
   id: string;
   expeditionId: string;
   locationId: string;
+  changeKind: "confirmation" | "revision" | "reaffirmation";
   expectedSourceRevision: string;
   resultingSourceRevision: string;
   proposalHash: string;
@@ -75,13 +77,21 @@ export interface ExpeditionRecord {
   campaignId: string;
   locationId: string;
   threadId: string;
+  mode: "initial" | "revision";
   state: ExpeditionState;
   activeTurnId?: string;
   messages: ExpeditionMessage[];
+  pendingCoordinations: PendingExplorationCoordination[];
   proposal?: DecisionProposal;
   createdAt: string;
   updatedAt: string;
   error?: string;
+}
+
+export interface PendingExplorationCoordination {
+  id: string;
+  update: RechartExplorationUpdate;
+  queuedAt: string;
 }
 
 export interface StreamingGuideMessage {
@@ -93,6 +103,7 @@ export interface StreamingGuideMessage {
 export interface ExpeditionView extends ExpeditionRecord {
   streamingMessage?: StreamingGuideMessage;
   writebackPlan?: WritebackPlanView;
+  approvalRequest?: AgentApprovalRequestView;
 }
 
 export type CodexConnectionState = "connecting" | "ready" | "reconnecting" | "unavailable";
@@ -105,3 +116,5 @@ export interface CodexServiceView {
 export function isTerminalExpeditionState(state: ExpeditionState): boolean {
   return state === "confirmed" || state === "abandoned" || state === "orphaned";
 }
+import type { AgentApprovalRequestView } from "../codex/approval.ts";
+import type { RechartExplorationUpdate } from "../charting/model.ts";

@@ -17,7 +17,7 @@ import type { CampaignSnapshot } from "../src/service/model.ts";
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PERSONAL_BRAIN_FIXTURE = path.resolve(
   TEST_DIRECTORY,
-  "../../.scratch/personal-brain-v1",
+  "fixtures/personal-brain-v1",
 );
 
 test("serves a token-bound same-origin bootstrap and protected campaign API", async (context) => {
@@ -488,8 +488,10 @@ class StubExpeditionService implements ExpeditionService {
       campaignId,
       locationId: "08",
       threadId: "thread-stub-08",
+      mode: "initial",
       state: "awaiting_player",
       messages: [],
+      pendingCoordinations: [],
       createdAt: "2026-08-02T00:00:00.000Z",
       updatedAt: "2026-08-02T00:00:00.000Z",
     };
@@ -553,6 +555,7 @@ class StubExpeditionService implements ExpeditionService {
       id: "writeback-stub",
       expeditionId: this.#view.id,
       locationId: "08",
+      changeKind: "confirmation",
       expectedSourceRevision: "sha256:stub-before",
       resultingSourceRevision: "sha256:stub-after",
       proposalHash: "sha256:stub",
@@ -578,6 +581,18 @@ class StubExpeditionService implements ExpeditionService {
     return structuredClone(this.#view);
   }
 
+  async endExpedition() {
+    this.#view.state = "ending";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async coordinateRechart() {}
+
+  async resolveApproval() {
+    return structuredClone(this.#view);
+  }
+
   async close() {}
 
   #publish() {
@@ -598,6 +613,8 @@ class StubChartingService implements ChartingService {
       threadId: "thread-charting-stub",
       state: "awaiting_player",
       messages: [],
+      rechartQueue: [],
+      rechartChanges: [],
       createdAt: "2026-08-04T00:00:00.000Z",
       updatedAt: "2026-08-04T00:00:00.000Z",
     };
@@ -641,6 +658,8 @@ class StubChartingService implements ChartingService {
       id: "map-proposal-stub",
       title: "首张地图",
       destination: "验证空项目建图。",
+      startingState: "当前项目目录为空。",
+      evidenceScope: ["当前项目目录"],
       notes: [],
       tickets: [
         { key: "first", title: "第一个入口", type: "grilling", question: "第一问？", blockedBy: [] },
@@ -688,6 +707,32 @@ class StubChartingService implements ChartingService {
     this.#view.state = "confirmed";
     this.#view.creationPlan = undefined;
     this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async rechartAfterConfirmation() {
+    this.#view.state = "confirmed";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async rechartAfterExplorationEnd() {
+    this.#view.state = "confirmed";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async retryRechart() {
+    return structuredClone(this.#view);
+  }
+
+  async restoreRechartChange() {
+    return structuredClone(this.#view);
+  }
+
+  setRechartConsumer() {}
+
+  async resolveApproval() {
     return structuredClone(this.#view);
   }
 

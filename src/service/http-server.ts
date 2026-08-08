@@ -13,6 +13,7 @@ import {
   ExpeditionOperationError,
   type ExpeditionService,
 } from "../expedition/manager.ts";
+import { isTerminalExpeditionState } from "../expedition/model.ts";
 import {
   ChartingManager,
   ChartingOperationError,
@@ -111,6 +112,7 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
   let activeStore = options.store;
   let activeExpeditions = options.expeditions;
   let activeCharting = options.charting;
+  connectRechartCoordination(activeCharting, activeExpeditions);
   const state = new ExplorerState(
     activeStore,
     activeExpeditions,
@@ -165,6 +167,7 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
       activeStore = next.store;
       activeExpeditions = next.expeditions;
       activeCharting = next.charting;
+      connectRechartCoordination(activeCharting, activeExpeditions);
       state.switchContext(
         activeStore,
         activeExpeditions,
@@ -353,6 +356,16 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     }),
   );
 
+  app.post<{ Params: { id: string; approvalId: string }; Body: unknown }>(
+    "/api/charting/:id/approvals/:approvalId",
+    async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service, body) => {
+      if (body.decision !== "approve" && body.decision !== "decline") {
+        throw new ChartingOperationError(400, "工具审批必须明确选择批准或拒绝。");
+      }
+      return service.resolveApproval(request.params.id, request.params.approvalId, body.decision);
+    }),
+  );
+
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/charting/:id/interrupt",
     async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service) =>
@@ -410,8 +423,44 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
 
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/locations/:id/expeditions",
-    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, (service) =>
-      service.startExpedition(request.params.id)),
+    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, (service) => {
+      if (activeCharting?.getViews().some((charting) =>
+        charting.pendingRechart ||
+        charting.rechartQueue.length ||
+        charting.state === "recharting" ||
+        charting.state === "rechart_failed")) {
+        throw new ExpeditionOperationError(409, "地图正在等待重新绘图，当前前沿不是最新状态。");
+      }
+      return service.startExpedition(request.params.id);
+    }),
+  );
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/charting/:id/rechart/retry",
+    async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service) => {
+      const activeLocationIds = activeExpeditions?.getViews()
+        .filter(({ state }) => !isTerminalExpeditionState(state))
+        .map(({ locationId }) => locationId) ?? [];
+      return service.retryRechart(request.params.id, activeLocationIds);
+    }),
+  );
+
+  app.post<{ Params: { id: string; changeId: string }; Body: unknown }>(
+    "/api/charting/:id/rechart-changes/:changeId/restore",
+    async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service, body) => {
+      if (typeof body.locationId !== "string") {
+        throw new ChartingOperationError(400, "恢复重绘变化需要指定议题。");
+      }
+      const activeLocationIds = activeExpeditions?.getViews()
+        .filter(({ state }) => !isTerminalExpeditionState(state))
+        .map(({ locationId }) => locationId) ?? [];
+      return service.restoreRechartChange(
+        request.params.id,
+        request.params.changeId,
+        body.locationId,
+        activeLocationIds,
+      );
+    }),
   );
 
   app.post<{ Params: { id: string }; Body: unknown }>(
@@ -424,10 +473,36 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     }),
   );
 
+  app.post<{ Params: { id: string; approvalId: string }; Body: unknown }>(
+    "/api/expeditions/:id/approvals/:approvalId",
+    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, (service, body) => {
+      if (body.decision !== "approve" && body.decision !== "decline") {
+        throw new ExpeditionOperationError(400, "工具审批必须明确选择批准或拒绝。");
+      }
+      return service.resolveApproval(request.params.id, request.params.approvalId, body.decision);
+    }),
+  );
+
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/expeditions/:id/interrupt",
     async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, (service) =>
       service.interrupt(request.params.id)),
+  );
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/expeditions/:id/end",
+    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, async (service) => {
+      if (!activeCharting?.getViews().some(({ mapCreatedAt }) => Boolean(mapCreatedAt))) {
+        throw new ExpeditionOperationError(409, "当前地图没有可继续协调的 Map Agent 会话，不能安全结束议题。");
+      }
+      const ending = await service.endExpedition(request.params.id);
+      const activeLocationIds = service.getViews()
+        .filter((candidate) =>
+          candidate.id !== ending.id && !isTerminalExpeditionState(candidate.state))
+        .map(({ locationId }) => locationId);
+      await activeCharting.rechartAfterExplorationEnd(ending.locationId, activeLocationIds);
+      return service.getView(ending.id) ?? ending;
+    }),
   );
 
   app.post<{ Params: { id: string }; Body: unknown }>(
@@ -464,15 +539,22 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
 
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/writebacks/:id/confirm",
-    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, (service, body) => {
+    async (request, reply) => runExpeditionAction(reply, activeExpeditions, request.body, async (service, body) => {
       if (typeof body.expectedSourceRevision !== "string" || typeof body.proposalHash !== "string") {
         throw new ExpeditionOperationError(400, "写回确认请求与预览不完整。");
       }
-      return service.confirmWriteback(
+      const confirmed = await service.confirmWriteback(
         request.params.id,
         body.expectedSourceRevision,
         body.proposalHash,
       );
+      if (activeCharting) {
+        const activeLocationIds = service.getViews()
+          .filter(({ state }) => !isTerminalExpeditionState(state))
+          .map(({ locationId }) => locationId);
+        await activeCharting.rechartAfterConfirmation(confirmed.locationId, activeLocationIds);
+      }
+      return confirmed;
     }),
   );
 
@@ -499,6 +581,20 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     getExpeditions: () => activeExpeditions,
     getCharting: () => activeCharting,
   };
+}
+
+function connectRechartCoordination(
+  charting: ChartingService | undefined,
+  expeditions: ExpeditionService | undefined,
+): void {
+  charting?.setRechartConsumer(async (proposal) => {
+    const batchId = [
+      proposal.sourceRevision,
+      proposal.triggerKind,
+      proposal.confirmedLocationId,
+    ].join(":");
+    await expeditions?.coordinateRechart(proposal.explorationUpdates, batchId);
+  });
 }
 
 /** Start the production-like local service on 127.0.0.1 only. */

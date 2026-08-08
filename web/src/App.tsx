@@ -19,6 +19,10 @@ import type {
   ChartingView,
 } from "../../src/charting/model.ts";
 import type {
+  AgentApprovalDecision,
+  AgentApprovalRequestView,
+} from "../../src/codex/approval.ts";
+import type {
   CampaignProjectIndex,
   CampaignProjectView,
 } from "../../src/project/model.ts";
@@ -74,6 +78,7 @@ export function App() {
     ({ id }) => id === snapshot.projects.activeProjectId,
   );
   const emptyProject = activeProject?.status === "empty";
+  const pendingRechart = snapshot.charting?.pendingRechart ?? snapshot.charting?.rechartQueue[0];
   const progress = campaign.summary.total
     ? Math.round((campaign.summary.resolved / campaign.summary.total) * 100)
     : 0;
@@ -132,6 +137,42 @@ export function App() {
         </div>
       ) : null}
 
+      {pendingRechart && snapshot.charting ? (
+        <div className="rechart-status" role="status">
+          <div className="rechart-banner">
+            <span>
+              {pendingRechart.triggerKind === "exploration_ended"
+                ? `议题 ${pendingRechart.confirmedLocationId} 已由认领者结束；Map Agent 正在保留未完成历史并协调其余地图。`
+                : `答案 ${pendingRechart.confirmedLocationId} 已确认；Map Agent 正在按顺序更新其余地图。`}
+              在重绘成功前不能从旧前沿开始新探索；后续确认会按顺序排队。
+              {snapshot.charting.rechartQueue.length
+                ? `另有 ${snapshot.charting.rechartQueue.length} 个已确认答案正在排队。`
+                : ""}
+            </span>
+            {snapshot.charting.state === "rechart_failed" ? (
+              <button
+                type="button"
+                onClick={() => void actions.retryRechart(snapshot.charting!.id).catch(() => undefined)}
+                disabled={actions.busyTarget === `charting:${snapshot.charting.id}`}
+              >
+                {actions.busyTarget === `charting:${snapshot.charting.id}` ? "正在重试…" : "重试重绘"}
+              </button>
+            ) : null}
+          </div>
+          {snapshot.charting.approvalRequest ? (
+            <ToolApprovalCard
+              request={snapshot.charting.approvalRequest}
+              busy={actions.busyTarget === `charting:${snapshot.charting.id}`}
+              onDecision={(decision) => void actions.resolveChartingApproval(
+                snapshot.charting!.id,
+                snapshot.charting!.approvalRequest!.id,
+                decision,
+              ).catch(() => undefined)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+
       {emptyProject && activeProject ? (
         <EmptyProjectStage
           project={activeProject}
@@ -154,8 +195,10 @@ export function App() {
             connection={connection}
             connectionError={error}
             expeditions={expeditions}
+            charting={snapshot.charting}
             codex={codex}
             actions={actions}
+            explorationBlocked={pendingRechart ? "Map Agent 尚未完成上一次确认后的重绘。" : undefined}
             onSelect={select}
           />
         </div>
@@ -182,6 +225,7 @@ function ProjectDrawer({
 }: {
   index: CampaignProjectIndex;
   actions: ExpeditionActions;
+  explorationBlocked?: string;
   onClose(): void;
 }) {
   const [mode, setMode] = useState<"create" | "add" | "relink">();
@@ -415,10 +459,10 @@ function EmptyProjectStage({
     <section className="empty-project-stage">
       <div className="empty-project-stage__intro">
         <div className="empty-project-stage__compass" aria-hidden="true"><i /></div>
-        <p className="ui-eyebrow">CHARTING MODE · 绘制地图</p>
-        <h2>先确认目的地，再绘制第一层地貌</h2>
+        <p className="ui-eyebrow">MAP AGENT · 初始绘图</p>
+        <h2>先确认目的地，再确认从哪里出发</h2>
         <p>
-          这里还没有 `map.md`。Codex 会先与你确认要抵达的结果，再做 breadth-first 扫描，形成候选 ticket、迷雾与边界；不会提前替你解决任何决定。
+          这里还没有 `map.md`。地图 Agent 会先与你确认终点，再确认起点、取证范围和现状基线，随后记录当前能够明确表达的待探索议题、迷雾与范围边界。首张地图只把起点和目的地作为正式节点，不会预先虚构路线。
         </p>
         <div className="empty-project-stage__path">
           <span>项目目录</span>
@@ -428,11 +472,14 @@ function EmptyProjectStage({
           <li className={!charting?.proposal ? "is-current" : "is-done"}>
             <b>01</b><span><strong>确认目的地</strong><small>明确可观察结果与边界</small></span>
           </li>
+          <li className={!charting?.proposal ? "is-current" : "is-done"}>
+            <b>02</b><span><strong>确认起点</strong><small>先约定取证范围，再定向核对现状</small></span>
+          </li>
           <li className={charting?.proposal ? "is-current" : ""}>
-            <b>02</b><span><strong>绘制首版地图</strong><small>候选 ticket、依赖、fog、out of scope</small></span>
+            <b>03</b><span><strong>绘制首张地图</strong><small>议题仍是议题，不提前生成节点或路线</small></span>
           </li>
           <li>
-            <b>03</b><span><strong>推进地图</strong><small>确认后从多个 frontier 中选择</small></span>
+            <b>04</b><span><strong>逐题探索并重绘</strong><small>答案确认后才成为节点，由地图 Agent 协调整张图</small></span>
           </li>
         </ol>
       </div>
@@ -483,25 +530,25 @@ function ChartingPanel({
   };
 
   return (
-    <article className="charting-panel" aria-label="Wayfinder 绘图会话">
+    <article className="charting-panel" aria-label="Wayfinder 地图 Agent 会话">
       <header className="expedition-panel__header">
         <div>
-          <p className="expedition-panel__eyebrow"><span aria-hidden="true" /> CODEX CHARTING</p>
-          <h3>{charting ? "首张地图正在这里形成" : "从一个想法开始绘图"}</h3>
+          <p className="expedition-panel__eyebrow"><span aria-hidden="true" /> MAP AGENT · CHARTING</p>
+          <h3>{charting ? "地图 Agent 正在与你确认首张地图" : "从一个目标开始探索"}</h3>
         </div>
         <ChartingStateBadge codex={codex} charting={charting} />
       </header>
 
       {!charting ? (
         <div className="expedition-launch">
-          <p>开始后是一个可持续、可恢复的 Codex 会话。只有你审阅并确认草案后，Explorer 才会创建 Markdown。</p>
+          <p>开始后会建立一个可持续、可恢复的地图 Agent 会话。只有你审阅草案、预览地图变化并明确确认后，Explorer 才会创建 Markdown。</p>
           <button
             type="button"
             className="expedition-launch__button"
             onClick={() => void actions.startCharting().catch(() => undefined)}
             disabled={busy}
           >
-            <span aria-hidden="true">✦</span>{busy ? "正在连接 Codex…" : "开始确认目的地"}
+            <span aria-hidden="true">✦</span>{busy ? "正在连接地图 Agent…" : "开始确认目的地"}
           </button>
           {codex.state !== "ready" ? <small>{codex.error ?? "点击后会尝试连接本机 Codex。"}</small> : null}
           {actions.error ? (
@@ -515,13 +562,13 @@ function ChartingPanel({
           <div className="expedition-transcript charting-transcript" ref={transcript} aria-live="polite">
             {charting.messages.map((message) => (
               <article className={`expedition-message expedition-message--${message.role}`} key={message.id}>
-                <span>{message.role === "guide" ? "CODEX" : "你"}</span>
+                <span>{message.role === "guide" ? "MAP AGENT" : "你"}</span>
                 <MarkdownText markdown={message.text} />
               </article>
             ))}
             {charting.streamingMessage ? (
               <article className="expedition-message expedition-message--guide is-streaming">
-                <span>CODEX</span><MarkdownText markdown={charting.streamingMessage.text} streaming />
+                <span>MAP AGENT</span><MarkdownText markdown={charting.streamingMessage.text} streaming />
               </article>
             ) : null}
             {(charting.state === "exploring" || charting.state === "reconciling" || charting.state === "returning") &&
@@ -531,8 +578,8 @@ function ChartingPanel({
                 {charting.state === "reconciling"
                   ? "正在找回原来的绘图会话"
                   : charting.state === "returning"
-                    ? "Codex 正在整理首版地图草案"
-                    : "Codex 正在辨认地貌"}
+                    ? "地图 Agent 正在整理首张地图草案"
+                    : "地图 Agent 正在确认当前地貌"}
               </div>
             ) : null}
           </div>
@@ -542,6 +589,18 @@ function ChartingPanel({
             <button type="button" className="expedition-action-error" onClick={actions.clearError}>
               {actions.error}<span>关闭</span>
             </button>
+          ) : null}
+
+          {charting.approvalRequest ? (
+            <ToolApprovalCard
+              request={charting.approvalRequest}
+              busy={busy}
+              onDecision={(decision) => void actions.resolveChartingApproval(
+                charting.id,
+                charting.approvalRequest!.id,
+                decision,
+              ).catch(() => undefined)}
+            />
           ) : null}
 
           {charting.proposal && (charting.state === "returned" || charting.state === "previewing") ? (
@@ -569,7 +628,7 @@ function ChartingPanel({
                 disabled={busy}
               />
               <div>
-                <small>继续同一个 Codex 绘图任务</small>
+                <small>继续同一个地图 Agent 会话</small>
                 <span className="expedition-composer__actions">
                   {canFormProposal ? (
                     <button
@@ -578,7 +637,7 @@ function ChartingPanel({
                       onClick={() => void actions.formMapProposal(charting.id).catch(() => undefined)}
                       disabled={busy}
                     >
-                      形成地图草案
+                      形成首张地图草案
                     </button>
                   ) : null}
                   <button type="submit" disabled={!draft.trim() || busy}>
@@ -589,7 +648,7 @@ function ChartingPanel({
             </form>
           ) : charting.state === "exploring" || charting.state === "awaiting_approval" || charting.state === "returning" ? (
             <div className="expedition-running">
-              <span>{charting.state === "returning" ? "正在形成可审阅地图草案" : "等待 Codex 完成本轮"}</span>
+              <span>{charting.state === "returning" ? "正在形成可审阅的首张地图草案" : "等待地图 Agent 完成本轮"}</span>
               {charting.activeTurnId && charting.state !== "returning" ? (
                 <button
                   type="button"
@@ -707,8 +766,10 @@ interface ThinkingStageProps {
   connection: ConnectionState;
   connectionError?: string;
   expeditions: ExpeditionView[];
+  charting?: ChartingView;
   codex: CodexServiceView;
   actions: ExpeditionActions;
+  explorationBlocked?: string;
   onSelect(selection: Selection): void;
 }
 
@@ -718,8 +779,10 @@ function ThinkingStage({
   connection,
   connectionError,
   expeditions,
+  charting,
   codex,
   actions,
+  explorationBlocked,
   onSelect,
 }: ThinkingStageProps) {
   return (
@@ -729,7 +792,9 @@ function ThinkingStage({
         <span className="thinking-stage__sequence">MAP {campaign.revision.slice(-6).toUpperCase()}</span>
       </div>
       <div className="thinking-stage__scroll" key={selectionKey(selection)}>
-        {selection.kind === "destination" ? (
+        {selection.kind === "start" ? (
+          <StartPanel campaign={campaign} />
+        ) : selection.kind === "destination" ? (
           <DestinationPanel campaign={campaign} />
         ) : selection.kind === "fog" ? (
           <FogPanel campaign={campaign} />
@@ -738,8 +803,10 @@ function ThinkingStage({
             campaign={campaign}
             locationId={selection.id}
             expeditions={expeditions}
+            charting={charting}
             codex={codex}
             actions={actions}
+            explorationBlocked={explorationBlocked}
             onSelect={onSelect}
           />
         )}
@@ -749,7 +816,7 @@ function ThinkingStage({
           <span title={connectionError}>正在重新取得地图联系</span>
         ) : (
           <span>
-            Wayfinder Markdown · {codex.state === "ready" ? "Codex 只读探索已连接" : "只读投影"}
+            Wayfinder Markdown · {codex.state === "ready" ? "Agent 探索已连接" : "地图投影"}
           </span>
         )}
         <span className="stage-coordinates" aria-hidden="true">N 08° · E 14°</span>
@@ -762,15 +829,19 @@ function LocationPanel({
   campaign,
   locationId,
   expeditions,
+  charting,
   codex,
   actions,
+  explorationBlocked,
   onSelect,
 }: {
   campaign: CampaignProjection;
   locationId: string;
   expeditions: ExpeditionView[];
+  charting?: ChartingView;
   codex: CodexServiceView;
   actions: ExpeditionActions;
+  explorationBlocked?: string;
   onSelect(selection: Selection): void;
 }) {
   const location = campaign.locations.find(({ id }) => id === locationId);
@@ -792,6 +863,11 @@ function LocationPanel({
   const expedition = [...locationExpeditions].reverse().find(
     ({ state }) => !isTerminalExpedition(state),
   ) ?? locationExpeditions.at(-1);
+  const restorableChange = location.sourceStatus === "open"
+    ? [...(charting?.rechartChanges ?? [])].reverse().find((change) =>
+        !change.restoredLocationIds.includes(location.id) &&
+        change.files.some((file) => file.locationId === location.id))
+    : undefined;
 
   return (
     <article className={`location-panel location-panel--${location.status}`}>
@@ -813,6 +889,40 @@ function LocationPanel({
         </p>
       ) : null}
 
+      {location.reviewState === "pending" ? (
+        <section className="review-pending-block" role="status">
+          <p className="section-label">待复核 · 节点与历史保持不变</p>
+          <blockquote>{location.reviewQuestion}</blockquote>
+          {location.reviewReason ? <p>{location.reviewReason}</p> : null}
+        </section>
+      ) : null}
+
+      {location.rechartState === "pending_delete" ? (
+        <section className="pending-deletion-block" role="status">
+          <p className="section-label">本轮重绘建议待删除 · 下轮必须重新评估</p>
+          <p>{location.pendingDeletionReason}</p>
+        </section>
+      ) : null}
+
+      {restorableChange && charting ? (
+        <section className="rechart-change-block" role="status">
+          <p className="section-label">Map Agent 在本轮重新绘图中改变了这个议题</p>
+          <p>你可以只撤销这一次变化；以后重新绘图仍会依据届时的答案重新评估它。</p>
+          <button
+            type="button"
+            className="is-secondary"
+            onClick={() => void actions.restoreRechartChange(
+              charting.id,
+              restorableChange.id,
+              location.id,
+            ).catch(() => undefined)}
+            disabled={actions.busyTarget === `charting:${charting.id}` || Boolean(charting.pendingRechart)}
+          >
+            {actions.busyTarget === `charting:${charting.id}` ? "正在恢复…" : "恢复本次变化"}
+          </button>
+        </section>
+      ) : null}
+
       {location.status === "frontier" && expedition ? (
         <ExpeditionPanel
           campaign={campaign}
@@ -820,6 +930,7 @@ function LocationPanel({
           expedition={expedition}
           codex={codex}
           actions={actions}
+          explorationBlocked={explorationBlocked}
         />
       ) : (
         <section className="question-block" aria-labelledby={`question-${location.id}`}>
@@ -834,7 +945,29 @@ function LocationPanel({
         <section className="answer-block">
           <p className="section-label">确认的决定</p>
           <MarkdownText markdown={location.answerMarkdown} />
+          {location.answerHistory.length ? (
+            <details className="answer-history">
+              <summary>查看之前的 {location.answerHistory.length} 个版本</summary>
+              {location.answerHistory.map((entry) => (
+                <article key={`${entry.label}-${entry.answerMarkdown}`}>
+                  <b>{entry.label}</b>
+                  <MarkdownText markdown={entry.answerMarkdown} />
+                </article>
+              ))}
+            </details>
+          ) : null}
         </section>
+      ) : null}
+
+      {location.status === "resolved" ? (
+        <ExpeditionPanel
+          campaign={campaign}
+          location={location}
+          expedition={expedition}
+          codex={codex}
+          actions={actions}
+          explorationBlocked={explorationBlocked}
+        />
       ) : null}
 
       {location.status === "frontier" && !expedition ? (
@@ -843,6 +976,7 @@ function LocationPanel({
           location={location}
           codex={codex}
           actions={actions}
+          explorationBlocked={explorationBlocked}
         />
       ) : null}
 
@@ -908,12 +1042,14 @@ function ExpeditionPanel({
   expedition,
   codex,
   actions,
+  explorationBlocked,
 }: {
   campaign: CampaignProjection;
   location: Location;
   expedition?: ExpeditionView;
   codex: CodexServiceView;
   actions: ExpeditionActions;
+  explorationBlocked?: string;
 }) {
   const [draft, setDraft] = useState("");
   const transcript = useRef<HTMLDivElement>(null);
@@ -922,6 +1058,13 @@ function ExpeditionPanel({
   const canReply = expedition?.state === "awaiting_player" || expedition?.state === "failed";
   const canFormProposal = canReply && expedition.messages.some(({ role }) => role === "player");
   const canRestart = expedition && isTerminalExpedition(expedition.state) && location.status === "frontier";
+  const canRevise = expedition && isTerminalExpedition(expedition.state) && location.sourceStatus === "resolved";
+  const canEnd = Boolean(
+    expedition &&
+    expedition.mode === "initial" &&
+    !isTerminalExpedition(expedition.state) &&
+    expedition.state !== "ending",
+  );
   const proposalStale = Boolean(
     expedition?.proposal && expedition.proposal.sourceRevision !== campaign.revision,
   );
@@ -989,6 +1132,18 @@ function ExpeditionPanel({
     void actions.resumeProposal(expedition.id).catch(() => undefined);
   };
 
+  const endExpedition = () => {
+    if (
+      !expedition ||
+      busy ||
+      !window.confirm("结束后不会形成答案或地图节点；当前会话与已有内容会保留为未完成历史。确定结束吗？")
+    ) {
+      return;
+    }
+    actions.clearError();
+    void actions.endExpedition(expedition.id).catch(() => undefined);
+  };
+
   return (
     <section className="expedition-panel" aria-label="Codex 探索任务">
       {expedition ? (
@@ -1008,24 +1163,49 @@ function ExpeditionPanel({
         <CodexStateBadge codex={codex} expedition={expedition} />
       </header>
 
-      {!expedition || canRestart ? (
+      {expedition?.approvalRequest ? (
+        <ToolApprovalCard
+          request={expedition.approvalRequest}
+          busy={busy}
+          onDecision={(decision) => void actions.resolveExpeditionApproval(
+            expedition.id,
+            expedition.approvalRequest!.id,
+            decision,
+          ).catch(() => undefined)}
+        />
+      ) : null}
+
+      {!expedition || canRestart || canRevise ? (
         <div className="expedition-launch">
           {expedition?.error ? <p className="expedition-error">{expedition.error}</p> : null}
           <p>
             Codex 会围绕这个地点一次问一个问题；你的回答和走过的思路会留在旅程记录里。
           </p>
-          <button type="button" className="expedition-launch__button" onClick={start} disabled={busy}>
+          <button
+            type="button"
+            className="expedition-launch__button"
+            onClick={start}
+            disabled={busy || Boolean(explorationBlocked)}
+          >
             <span aria-hidden="true">✦</span>
-            {busy ? "正在连接 Codex…" : expedition ? "重新开始探索" : "开始探索"}
+            {busy
+              ? "正在连接 Agent…"
+              : canRevise
+                ? "修订这个答案"
+                : expedition
+                  ? "重新开始探索"
+                  : "开始探索"}
           </button>
           {codex.state !== "ready" ? (
             <small>{codex.error ?? "点击后会尝试连接本机 Codex。"}</small>
           ) : null}
+          {explorationBlocked ? <small>{explorationBlocked}</small> : null}
           {actions.error ? (
             <button type="button" className="expedition-action-error" onClick={actions.clearError}>
               {actions.error}<span>关闭</span>
             </button>
           ) : null}
+
         </div>
       ) : (
         <>
@@ -1081,6 +1261,12 @@ function ExpeditionPanel({
             />
           ) : null}
 
+          {expedition.state === "ending" ? (
+            <div className="expedition-ending" role="status">
+              这次探索已由你结束。Map Agent 正在把议题移出当前范围；不会生成答案、地图节点或确定路线。
+            </div>
+          ) : null}
+
           {canReply ? (
             <form className="expedition-composer" onSubmit={submit}>
               <label htmlFor={`expedition-reply-${expedition.id}`}>你的回答</label>
@@ -1116,7 +1302,7 @@ function ExpeditionPanel({
             <div className="expedition-running">
               <span>
                 {expedition.state === "awaiting_approval"
-                  ? "只读边界正在处理请求"
+                  ? "等待你批准或拒绝工具请求"
                   : expedition.state === "returning"
                     ? "正在把探索整理成可审阅草案"
                     : "等待 Codex 完成本轮"}
@@ -1131,6 +1317,17 @@ function ExpeditionPanel({
                 </button>
               ) : null}
             </div>
+          ) : null}
+
+          {canEnd ? (
+            <button
+              type="button"
+              className="expedition-end-button"
+              onClick={endExpedition}
+              disabled={busy}
+            >
+              结束这次探索并保留未完成历史
+            </button>
           ) : null}
         </>
       )}
@@ -1163,7 +1360,13 @@ function DecisionProposalCard({
         <header>
           <div>
             <p className="section-label">地图变化预览</p>
-            <h4>确认后，这些路线会改变</h4>
+            <h4>
+              {plan.changeKind === "reaffirmation"
+                ? "确认原答案仍然成立"
+                : plan.changeKind === "revision"
+                  ? "确认修订并协调相关地图"
+                  : "确认后，这些路线会改变"}
+            </h4>
           </div>
           <span>尚未写入</span>
         </header>
@@ -1267,6 +1470,36 @@ function ProposalDetail({ label, items }: { label: string; items: string[] }) {
   );
 }
 
+function ToolApprovalCard({
+  request,
+  busy,
+  onDecision,
+}: {
+  request: AgentApprovalRequestView;
+  busy: boolean;
+  onDecision(decision: AgentApprovalDecision): void;
+}) {
+  return (
+    <section className="tool-approval" aria-label="Agent 工具审批">
+      <p className="section-label">需要你的运行时授权</p>
+      <h4>{request.summary}</h4>
+      {request.reason ? <p>{request.reason}</p> : null}
+      {request.details.length ? (
+        <ul>{request.details.map((detail) => <li key={detail}><code>{detail}</code></li>)}</ul>
+      ) : null}
+      <small>这只授权工具副作用，不等于确认答案或规范地图变化。</small>
+      <div className="proposal-actions">
+        <button type="button" className="is-secondary" onClick={() => onDecision("decline")} disabled={busy}>
+          拒绝
+        </button>
+        <button type="button" onClick={() => onDecision("approve")} disabled={busy}>
+          批准本次
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function CodexStateBadge({
   codex,
   expedition,
@@ -1299,6 +1532,24 @@ function DestinationPanel({ campaign }: { campaign: CampaignProjection }) {
         <p className="section-label">地图边界之外</p>
         <ul className="scope-list">
           {campaign.outOfScope.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </section>
+    </article>
+  );
+}
+
+function StartPanel({ campaign }: { campaign: CampaignProjection }) {
+  return (
+    <article className="destination-panel start-panel">
+      <p className="location-kicker"><span>◇</span> START</p>
+      <h2>这段旅程从哪里开始</h2>
+      <div className="destination-panel__statement">
+        <p>{campaign.startingState || "尚未记录起点。"}</p>
+      </div>
+      <section>
+        <p className="section-label">允许作为事实的证据</p>
+        <ul className="scope-list">
+          {campaign.evidenceScope.map((item) => <li key={item}>{item}</li>)}
         </ul>
       </section>
     </article>
@@ -1426,6 +1677,9 @@ function expeditionStateLabel(state: ExpeditionState): string {
   }
   if (state === "abandoned") {
     return "已留档";
+  }
+  if (state === "ending") {
+    return "正在结束";
   }
   return "已建立";
 }

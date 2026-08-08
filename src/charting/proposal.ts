@@ -8,11 +8,12 @@ import type {
 
 const MAX_TITLE_LENGTH = 120;
 const MAX_DESTINATION_LENGTH = 4_000;
+const MAX_STARTING_STATE_LENGTH = 4_000;
 const MAX_QUESTION_LENGTH = 4_000;
 const MAX_LIST_ITEMS = 24;
 const MAX_LIST_ITEM_LENGTH = 1_000;
 const MAX_TICKETS = 20;
-const MIN_TICKETS = 2;
+const MIN_TICKETS = 0;
 const TICKET_TYPES = ["grilling", "prototype", "research", "task"] as const;
 
 export function mapProposalEvidenceRefs(charting: ChartingRecord): string[] {
@@ -26,6 +27,8 @@ export function mapProposalOutputSchema(evidenceRefs: string[]): JsonValue {
     properties: {
       title: { type: "string" },
       destination: { type: "string" },
+      startingState: { type: "string" },
+      evidenceScope: stringArraySchema(),
       notes: stringArraySchema(),
       tickets: {
         type: "array",
@@ -52,6 +55,8 @@ export function mapProposalOutputSchema(evidenceRefs: string[]): JsonValue {
     required: [
       "title",
       "destination",
+      "startingState",
+      "evidenceScope",
       "notes",
       "tickets",
       "fog",
@@ -67,12 +72,13 @@ export function buildMapProposalPrompt(projectName: string, evidenceRefs: string
 
 要求：
 - 项目名是「${projectName}」。title 是地图标题，destination 是这段旅程最终要抵达的可观察结果。
-- 采用 Wayfinder 的 breadth-first charting：先列出第一层真正需要决定或验证的候选 ticket，不要把实现步骤伪装成已确认决定。
-- tickets 至少 2 个、最多 ${MAX_TICKETS} 个。每个 key 使用唯一的小写 ASCII kebab-case；blockedBy 只能引用同一草案里的 key。
-- 保证依赖无环，并至少留下两个无需前置依赖的 grilling ticket，让玩家能从多个 frontier 中选择；当前选中节点不属于地图草案。
+- startingState 是玩家确认的固定现状基线；evidenceScope 是形成该基线时共同约定、实际使用过的取证边界。不要把后来可能发生的变化写入起点。
+- Wayfinder 只是设计启发，不是绘图契约。不要采用预设的 breadth-first 层级，也不要为了画出完整路线而发明议题。
+- tickets 记录起点与目的地之间当前已经能够稳定表达、且各自需要独立探索或新事实的自然议题，最多 ${MAX_TICKETS} 个；既可以是立即可探索议题，也可以是具有真实前置依赖的受阻议题。如果当前没有这样的议题，可以为空。每个 key 使用唯一的小写 ASCII kebab-case；blockedBy 只能引用同一草案里的 key。
+- 保证依赖无环。不要为了制造多个 frontier 或依赖边而拆分同一个自然决策；一个连贯探索能解决的条件分支属于同一个 ticket。当前选中节点不属于地图草案。
 - type 只使用 grilling、prototype、research、task。判断尚不清楚用 grilling；具体形态需要试做用 prototype；需要外部事实用 research；明确执行工作才用 task。
 - fog 记录目前只能看见主题、还不能稳定表述成 ticket 的未知区域。outOfScope 记录明确不进入这段旅程的边界。
-- 不要解决任何 ticket，不要填写 Answer，不要生成 Decisions so far。
+- tickets 在答案确认前都只是待探索议题，不是地图节点或确定路线。首张地图的正式节点只有起点和目的地；不要解决任何 ticket，不要填写 Answer，不要生成 Decisions so far，也不要连接起点与目的地。
 - 忠实反映玩家在本线程表达的目标与边界，不替玩家补造偏好或事实。
 - evidenceRefs 只能从下方标识中选择，并至少引用一个绘图 turn。
 - 所有文本使用简体中文。不要使用 HTML、图片、元数据行或会破坏 Markdown 层级的标题。
@@ -98,6 +104,8 @@ export function parseMapProposalContent(
   const expectedKeys = new Set([
     "title",
     "destination",
+    "startingState",
+    "evidenceScope",
     "notes",
     "tickets",
     "fog",
@@ -110,6 +118,15 @@ export function parseMapProposalContent(
 
   const title = singleLine(decoded.title, "title", MAX_TITLE_LENGTH);
   const destination = safeSection(decoded.destination, "destination", MAX_DESTINATION_LENGTH);
+  const startingState = safeSection(
+    decoded.startingState,
+    "startingState",
+    MAX_STARTING_STATE_LENGTH,
+  );
+  const evidenceScope = stringList(decoded.evidenceScope, "evidenceScope");
+  if (!evidenceScope.length) {
+    throw new MapProposalValidationError("地图草案必须记录至少一项取证范围。");
+  }
   const notes = stringList(decoded.notes, "notes");
   const fog = stringList(decoded.fog, "fog");
   const outOfScope = stringList(decoded.outOfScope, "outOfScope");
@@ -124,18 +141,15 @@ export function parseMapProposalContent(
   }
 
   if (!Array.isArray(decoded.tickets) || decoded.tickets.length < MIN_TICKETS || decoded.tickets.length > MAX_TICKETS) {
-    throw new MapProposalValidationError(`地图草案必须包含 ${MIN_TICKETS} 到 ${MAX_TICKETS} 个候选 ticket。`);
+    throw new MapProposalValidationError(`地图草案必须包含 ${MIN_TICKETS} 到 ${MAX_TICKETS} 个待探索议题。`);
   }
   const tickets = decoded.tickets.map((value, index) => parseTicket(value, index));
   validateTicketGraph(tickets);
-  const openGrilling = tickets.filter(({ type, blockedBy }) => type === "grilling" && !blockedBy.length);
-  if (openGrilling.length < 2) {
-    throw new MapProposalValidationError("首版地图至少需要两个可立即探索的 grilling frontier。 ");
-  }
-
   return {
     title,
     destination,
+    startingState,
+    evidenceScope,
     notes,
     tickets,
     fog,

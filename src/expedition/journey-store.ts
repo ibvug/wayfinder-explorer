@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { CampaignProjection } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
+import type { RechartExplorationUpdate } from "../charting/model.ts";
 import type {
   DecisionProposal,
   ExpeditionMessage,
@@ -25,7 +26,13 @@ interface ExpeditionStartedEvent extends JourneyEventBase {
     expeditionId: string;
     locationId: string;
     threadId: string;
+    mode?: "initial" | "revision";
   };
+}
+
+interface ExpeditionRevisionStartedEvent extends JourneyEventBase {
+  type: "expedition_revision_started";
+  payload: { expeditionId: string };
 }
 
 interface ExpeditionStateChangedEvent extends JourneyEventBase {
@@ -64,12 +71,32 @@ interface WritebackConfirmedEvent extends JourneyEventBase {
   };
 }
 
+interface ExplorationCoordinationQueuedEvent extends JourneyEventBase {
+  type: "exploration_coordination_queued";
+  payload: {
+    expeditionId: string;
+    coordinationId: string;
+    update: RechartExplorationUpdate;
+  };
+}
+
+interface ExplorationCoordinationDeliveredEvent extends JourneyEventBase {
+  type: "exploration_coordination_delivered";
+  payload: {
+    expeditionId: string;
+    coordinationIds: string[];
+  };
+}
+
 export type JourneyEvent =
   | ExpeditionStartedEvent
+  | ExpeditionRevisionStartedEvent
   | ExpeditionStateChangedEvent
   | ExpeditionMessageRecordedEvent
   | ProposalReturnedEvent
-  | WritebackConfirmedEvent;
+  | WritebackConfirmedEvent
+  | ExplorationCoordinationQueuedEvent
+  | ExplorationCoordinationDeliveredEvent;
 
 export interface JourneyStoreOptions {
   dataRoot?: string;
@@ -117,14 +144,32 @@ export class JourneyStore {
     return record ? structuredClone(record) : undefined;
   }
 
-  async start(expeditionId: string, locationId: string, threadId: string): Promise<ExpeditionRecord> {
+  async start(
+    expeditionId: string,
+    locationId: string,
+    threadId: string,
+    mode: "initial" | "revision" = "initial",
+  ): Promise<ExpeditionRecord> {
     if (this.#records.has(expeditionId)) {
       throw new Error(`Expedition ${expeditionId} already exists.`);
     }
     const event: ExpeditionStartedEvent = {
       ...this.#eventBase(),
       type: "expedition_started",
-      payload: { expeditionId, locationId, threadId },
+      payload: { expeditionId, locationId, threadId, mode },
+    };
+    await this.#append(event);
+    return this.get(expeditionId)!;
+  }
+
+  async beginRevision(expeditionId: string): Promise<ExpeditionRecord> {
+    if (!this.#records.has(expeditionId)) {
+      throw new Error(`Unknown expedition ${expeditionId}.`);
+    }
+    const event: ExpeditionRevisionStartedEvent = {
+      ...this.#eventBase(),
+      type: "expedition_revision_started",
+      payload: { expeditionId },
     };
     await this.#append(event);
     return this.get(expeditionId)!;
@@ -199,6 +244,43 @@ export class JourneyStore {
     return this.get(expeditionId)!;
   }
 
+  async queueCoordination(
+    expeditionId: string,
+    coordinationId: string,
+    update: RechartExplorationUpdate,
+  ): Promise<ExpeditionRecord> {
+    const record = this.#records.get(expeditionId);
+    if (!record) {
+      throw new Error(`Unknown expedition ${expeditionId}.`);
+    }
+    if (record.pendingCoordinations.some(({ id }) => id === coordinationId)) {
+      return this.get(expeditionId)!;
+    }
+    const event: ExplorationCoordinationQueuedEvent = {
+      ...this.#eventBase(),
+      type: "exploration_coordination_queued",
+      payload: { expeditionId, coordinationId, update: structuredClone(update) },
+    };
+    await this.#append(event);
+    return this.get(expeditionId)!;
+  }
+
+  async markCoordinationsDelivered(
+    expeditionId: string,
+    coordinationIds: string[],
+  ): Promise<ExpeditionRecord> {
+    if (!this.#records.has(expeditionId)) {
+      throw new Error(`Unknown expedition ${expeditionId}.`);
+    }
+    const event: ExplorationCoordinationDeliveredEvent = {
+      ...this.#eventBase(),
+      type: "exploration_coordination_delivered",
+      payload: { expeditionId, coordinationIds: [...new Set(coordinationIds)] },
+    };
+    await this.#append(event);
+    return this.get(expeditionId)!;
+  }
+
   async close(): Promise<void> {
     await this.#appendChain;
   }
@@ -260,8 +342,10 @@ export class JourneyStore {
         campaignId: event.campaignId,
         locationId: event.payload.locationId,
         threadId: event.payload.threadId,
+        mode: event.payload.mode ?? "initial",
         state: "created",
         messages: [],
+        pendingCoordinations: [],
         createdAt: event.timestamp,
         updatedAt: event.timestamp,
       });
@@ -270,6 +354,14 @@ export class JourneyStore {
     const record = this.#records.get(event.payload.expeditionId);
     if (!record) {
       throw new Error(`Journey event ${event.id} refers to an unknown expedition.`);
+    }
+    if (event.type === "expedition_revision_started") {
+      record.mode = "revision";
+      record.state = "awaiting_player";
+      record.activeTurnId = undefined;
+      record.error = undefined;
+      record.updatedAt = event.timestamp;
+      return;
     }
     if (event.type === "expedition_state_changed") {
       record.state = event.payload.state;
@@ -290,6 +382,23 @@ export class JourneyStore {
       record.state = "confirmed";
       record.activeTurnId = undefined;
       record.error = undefined;
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "exploration_coordination_queued") {
+      if (!record.pendingCoordinations.some(({ id }) => id === event.payload.coordinationId)) {
+        record.pendingCoordinations.push({
+          id: event.payload.coordinationId,
+          update: structuredClone(event.payload.update),
+          queuedAt: event.timestamp,
+        });
+      }
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "exploration_coordination_delivered") {
+      const delivered = new Set(event.payload.coordinationIds);
+      record.pendingCoordinations = record.pendingCoordinations.filter(({ id }) => !delivered.has(id));
       record.updatedAt = event.timestamp;
       return;
     }
@@ -325,8 +434,12 @@ function isJourneyEvent(value: unknown, campaignId: string): value is JourneyEve
     return (
       typeof value.payload.expeditionId === "string" &&
       typeof value.payload.locationId === "string" &&
-      typeof value.payload.threadId === "string"
+      typeof value.payload.threadId === "string" &&
+      (value.payload.mode === undefined || value.payload.mode === "initial" || value.payload.mode === "revision")
     );
+  }
+  if (value.type === "expedition_revision_started") {
+    return typeof value.payload.expeditionId === "string";
   }
   if (value.type === "expedition_state_changed") {
     return (
@@ -351,11 +464,28 @@ function isJourneyEvent(value: unknown, campaignId: string): value is JourneyEve
       value.payload.impact.every(isWritebackImpact)
     );
   }
+  if (value.type === "exploration_coordination_queued") {
+    return typeof value.payload.expeditionId === "string" &&
+      typeof value.payload.coordinationId === "string" &&
+      isRechartExplorationUpdate(value.payload.update);
+  }
+  if (value.type === "exploration_coordination_delivered") {
+    return typeof value.payload.expeditionId === "string" &&
+      Array.isArray(value.payload.coordinationIds) &&
+      value.payload.coordinationIds.every((id) => typeof id === "string");
+  }
   return (
     value.type === "expedition_message_recorded" &&
     typeof value.payload.expeditionId === "string" &&
     isExpeditionMessage(value.payload.message)
   );
+}
+
+function isRechartExplorationUpdate(value: unknown): value is RechartExplorationUpdate {
+  return isRecord(value) &&
+    typeof value.locationId === "string" &&
+    typeof value.contextMarkdown === "string" &&
+    typeof value.reason === "string";
 }
 
 function isDecisionProposal(value: unknown): value is DecisionProposal {
@@ -422,6 +552,7 @@ function isExpeditionState(value: unknown): value is ExpeditionState {
     value === "returned" ||
     value === "drafted" ||
     value === "previewing" ||
+    value === "ending" ||
     value === "confirmed" ||
     value === "abandoned" ||
     value === "orphaned"

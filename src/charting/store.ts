@@ -9,6 +9,8 @@ import type {
   ChartingRecord,
   ChartingState,
   MapProposal,
+  RechartChangeView,
+  RechartTriggerKind,
 } from "./model.ts";
 
 interface ChartingEventBase {
@@ -52,12 +54,55 @@ interface MapCreationConfirmedEvent extends ChartingEventBase {
   };
 }
 
+interface RechartRequestedEvent extends ChartingEventBase {
+  type: "rechart_requested";
+  payload: {
+    chartingId: string;
+    confirmedLocationId: string;
+    triggerKind?: RechartTriggerKind;
+    activeLocationIds: string[];
+  };
+}
+
+interface RechartCompletedEvent extends ChartingEventBase {
+  type: "rechart_completed";
+  payload: {
+    chartingId: string;
+    resultingSourceRevision: string;
+    change?: RechartChangeView;
+  };
+}
+
+interface RechartQueuedEvent extends ChartingEventBase {
+  type: "rechart_queued";
+  payload: {
+    chartingId: string;
+    confirmedLocationId: string;
+    triggerKind?: RechartTriggerKind;
+    activeLocationIds: string[];
+  };
+}
+
+interface RechartChangeRestoredEvent extends ChartingEventBase {
+  type: "rechart_change_restored";
+  payload: {
+    chartingId: string;
+    changeId: string;
+    locationId: string;
+    resultingSourceRevision: string;
+  };
+}
+
 export type ChartingEvent =
   | ChartingStartedEvent
   | ChartingStateChangedEvent
   | ChartingMessageRecordedEvent
   | MapProposalReturnedEvent
-  | MapCreationConfirmedEvent;
+  | MapCreationConfirmedEvent
+  | RechartRequestedEvent
+  | RechartQueuedEvent
+  | RechartCompletedEvent
+  | RechartChangeRestoredEvent;
 
 export interface ChartingStoreOptions {
   dataRoot?: string;
@@ -179,6 +224,69 @@ export class ChartingStore {
     return this.get(chartingId)!;
   }
 
+  async beginRechart(
+    chartingId: string,
+    confirmedLocationId: string,
+    activeLocationIds: string[],
+    triggerKind: RechartTriggerKind = "answer_confirmed",
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: RechartRequestedEvent = {
+      ...this.#eventBase(),
+      type: "rechart_requested",
+      payload: { chartingId, confirmedLocationId, triggerKind, activeLocationIds: [...activeLocationIds] },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async enqueueRechart(
+    chartingId: string,
+    confirmedLocationId: string,
+    activeLocationIds: string[],
+    triggerKind: RechartTriggerKind = "answer_confirmed",
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: RechartQueuedEvent = {
+      ...this.#eventBase(),
+      type: "rechart_queued",
+      payload: { chartingId, confirmedLocationId, triggerKind, activeLocationIds: [...activeLocationIds] },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async completeRechart(
+    chartingId: string,
+    resultingSourceRevision: string,
+    change?: RechartChangeView,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: RechartCompletedEvent = {
+      ...this.#eventBase(),
+      type: "rechart_completed",
+      payload: { chartingId, resultingSourceRevision, change },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async restoreRechartChange(
+    chartingId: string,
+    changeId: string,
+    locationId: string,
+    resultingSourceRevision: string,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: RechartChangeRestoredEvent = {
+      ...this.#eventBase(),
+      type: "rechart_change_restored",
+      payload: { chartingId, changeId, locationId, resultingSourceRevision },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
   async close(): Promise<void> {
     await this.#appendChain;
   }
@@ -245,6 +353,8 @@ export class ChartingStore {
           threadId: event.payload.threadId,
           state: "created",
           messages: [],
+          rechartQueue: [],
+          rechartChanges: [],
           createdAt: event.timestamp,
           updatedAt: event.timestamp,
         });
@@ -272,8 +382,58 @@ export class ChartingStore {
     }
     if (event.type === "map_creation_confirmed") {
       record.state = "confirmed";
+      record.mapCreatedAt = event.timestamp;
       record.activeTurnId = undefined;
       record.error = undefined;
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "rechart_requested") {
+      if (record.rechartQueue[0]?.confirmedLocationId === event.payload.confirmedLocationId) {
+        record.rechartQueue.shift();
+      }
+      record.pendingRechart = {
+        confirmedLocationId: event.payload.confirmedLocationId,
+        triggerKind: event.payload.triggerKind ?? "answer_confirmed",
+        activeLocationIds: [...event.payload.activeLocationIds],
+        sourceRevision: event.sourceRevision,
+        requestedAt: event.timestamp,
+      };
+      record.state = "recharting";
+      record.activeTurnId = undefined;
+      record.error = undefined;
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "rechart_queued") {
+      record.rechartQueue.push({
+        confirmedLocationId: event.payload.confirmedLocationId,
+        triggerKind: event.payload.triggerKind ?? "answer_confirmed",
+        activeLocationIds: [...event.payload.activeLocationIds],
+        enqueuedAt: event.timestamp,
+      });
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "rechart_completed") {
+      record.pendingRechart = undefined;
+      record.state = "confirmed";
+      record.activeTurnId = undefined;
+      record.error = undefined;
+      if (event.payload.change) {
+        record.rechartChanges.push(structuredClone(event.payload.change));
+      }
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "rechart_change_restored") {
+      const change = record.rechartChanges.find(({ id }) => id === event.payload.changeId);
+      if (!change) {
+        throw new Error(`Rechart restoration ${event.id} refers to an unknown change.`);
+      }
+      if (!change.restoredLocationIds.includes(event.payload.locationId)) {
+        change.restoredLocationIds.push(event.payload.locationId);
+      }
       record.updatedAt = event.timestamp;
       return;
     }
@@ -324,7 +484,49 @@ function isChartingEvent(value: unknown, campaignId: string): value is ChartingE
     return typeof value.payload.planId === "string" &&
       typeof value.payload.resultingSourceRevision === "string";
   }
+  if (value.type === "rechart_requested") {
+    return typeof value.payload.confirmedLocationId === "string" &&
+      (value.payload.triggerKind === undefined || isRechartTriggerKind(value.payload.triggerKind)) &&
+      Array.isArray(value.payload.activeLocationIds) &&
+      value.payload.activeLocationIds.every((id) => typeof id === "string");
+  }
+  if (value.type === "rechart_queued") {
+    return typeof value.payload.confirmedLocationId === "string" &&
+      (value.payload.triggerKind === undefined || isRechartTriggerKind(value.payload.triggerKind)) &&
+      Array.isArray(value.payload.activeLocationIds) &&
+      value.payload.activeLocationIds.every((id) => typeof id === "string");
+  }
+  if (value.type === "rechart_completed") {
+    return typeof value.payload.resultingSourceRevision === "string" &&
+      (value.payload.change === undefined || isRechartChangeView(value.payload.change));
+  }
+  if (value.type === "rechart_change_restored") {
+    return typeof value.payload.changeId === "string" &&
+      typeof value.payload.locationId === "string" &&
+      typeof value.payload.resultingSourceRevision === "string";
+  }
   return false;
+}
+
+function isRechartTriggerKind(value: unknown): value is RechartTriggerKind {
+  return value === "answer_confirmed" || value === "exploration_ended";
+}
+
+function isRechartChangeView(value: unknown): value is RechartChangeView {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.confirmedLocationId === "string" &&
+    typeof value.sourceRevisionBefore === "string" &&
+    typeof value.sourceRevisionAfter === "string" &&
+    typeof value.createdAt === "string" &&
+    Array.isArray(value.restoredLocationIds) &&
+    value.restoredLocationIds.every((id) => typeof id === "string") &&
+    Array.isArray(value.files) &&
+    value.files.every((file) => isRecord(file) &&
+      typeof file.locationId === "string" &&
+      typeof file.path === "string" &&
+      (file.operation === "created" || file.operation === "updated" ||
+        file.operation === "deleted" || file.operation === "archived"));
 }
 
 function isChartingMessage(value: unknown): value is ChartingMessage {
@@ -347,6 +549,8 @@ function isChartingState(value: unknown): value is ChartingState {
     value === "returned" ||
     value === "previewing" ||
     value === "confirmed" ||
+    value === "recharting" ||
+    value === "rechart_failed" ||
     value === "orphaned";
 }
 

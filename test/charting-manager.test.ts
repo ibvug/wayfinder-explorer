@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,9 +13,10 @@ import {
   ChartingManager,
   type ChartingTransport,
 } from "../src/charting/manager.ts";
-import { chartingPathFor } from "../src/charting/store.ts";
+import { ChartingStore, chartingPathFor } from "../src/charting/store.ts";
 import { CampaignStore } from "../src/service/campaign-store.ts";
 import { inspectCampaignAs } from "../src/wayfinder.ts";
+import { RechartService } from "../src/charting/rechart-service.ts";
 
 test("persists one charting conversation and confirms a valid first Wayfinder map", async (context) => {
   const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-data-"));
@@ -38,6 +39,10 @@ test("persists one charting conversation and confirms a valid first Wayfinder ma
   await waitFor(() => firstManager.getView(started.id)?.state === "awaiting_player");
   assert.equal(firstManager.getView(started.id)?.threadId, "thread-charting-1");
   assert.match(firstManager.getView(started.id)!.messages[0].text, /目的地/);
+  const chartingInstructions = readString(world.threadStartParams[0], "developerInstructions");
+  assert.match(chartingInstructions, /Phase 3, Initial Charting/);
+  assert.match(chartingInstructions, /only the confirmed start and destination are formal map nodes/);
+  assert.doesNotMatch(chartingInstructions, /Phase 3, Breadth-first Charting/);
 
   await firstManager.close();
   await firstStore.close();
@@ -155,10 +160,119 @@ test("does not overwrite a map created after the charting preview", async (conte
   });
 });
 
+test("persists confirmations queued behind a pending rechart in confirmation order", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-queue-data-"));
+  context.after(() => rm(dataRoot, { recursive: true, force: true }));
+  const campaign = await inspectCampaignAs(
+    path.resolve("test/fixtures/personal-brain-v1"),
+    "campaign-abcdef000001",
+  );
+  const first = await ChartingStore.open(campaign, { dataRoot });
+  const chartingId = "charting-queue";
+  await first.start(chartingId, "thread-queue");
+  await first.confirmMap(chartingId, "initial-map", campaign.revision);
+  await first.beginRechart(chartingId, "01", ["08"]);
+  await first.enqueueRechart(chartingId, "02", ["08"]);
+  await first.close();
+
+  const reopened = await ChartingStore.open(campaign, { dataRoot });
+  assert.equal(reopened.get(chartingId)?.pendingRechart?.confirmedLocationId, "01");
+  assert.deepEqual(
+    reopened.get(chartingId)?.rechartQueue.map(({ confirmedLocationId }) => confirmedLocationId),
+    ["02"],
+  );
+  await reopened.completeRechart(chartingId, campaign.revision);
+  await reopened.beginRechart(chartingId, "02", ["08"]);
+  assert.equal(reopened.get(chartingId)?.pendingRechart?.confirmedLocationId, "02");
+  assert.deepEqual(reopened.get(chartingId)?.rechartQueue, []);
+  await reopened.completeRechart(chartingId, campaign.revision, {
+    id: "rechart-change-persisted",
+    confirmedLocationId: "02",
+    sourceRevisionBefore: campaign.revision,
+    sourceRevisionAfter: campaign.revision,
+    createdAt: "2026-08-07T00:00:00.000Z",
+    files: [{ locationId: "09", path: "issues/09-example.md", operation: "updated" }],
+    restoredLocationIds: [],
+  });
+  await reopened.restoreRechartChange(
+    chartingId,
+    "rechart-change-persisted",
+    "09",
+    campaign.revision,
+  );
+  await reopened.close();
+
+  const restored = await ChartingStore.open(campaign, { dataRoot });
+  assert.deepEqual(restored.get(chartingId)?.rechartChanges[0]?.restoredLocationIds, ["09"]);
+  await restored.close();
+});
+
+test("startup adopts a committed rechart that crashed before its completion event", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-adopt-data-"));
+  const campaignRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-adopt-campaign-"));
+  await cp(path.resolve("test/fixtures/personal-brain-v1"), campaignRoot, { recursive: true });
+  context.after(() => Promise.all([
+    rm(dataRoot, { recursive: true, force: true }),
+    rm(campaignRoot, { recursive: true, force: true }),
+  ]));
+  const store = await CampaignStore.open({ campaignRoot, dataRoot, watch: false });
+  const before = store.getSnapshot().campaign;
+  const chartingStore = await ChartingStore.open(before, { dataRoot });
+  await chartingStore.start("charting-crash-adopt", "thread-crash-adopt");
+  await chartingStore.confirmMap("charting-crash-adopt", "initial-map", before.revision);
+  await chartingStore.beginRechart("charting-crash-adopt", "07", []);
+  await chartingStore.close();
+
+  const target = before.locations.find(({ id }) => id === "08")!;
+  const rechart = new RechartService({ campaignRoot, campaignId: before.id, dataRoot });
+  const change = await rechart.apply({
+    id: "rechart-proposal-crash-adopt",
+    sourceRevision: before.revision,
+    sourceTurnId: "turn-crash-adopt",
+    confirmedLocationId: "07",
+    triggerKind: "answer_confirmed",
+    createdAt: "2026-08-07T00:00:00.000Z",
+    issueChanges: [{
+      kind: "update",
+      issueId: "08",
+      title: `${target.title}（已协调）`,
+      type: target.type === "unknown" ? "grilling" : target.type,
+      question: target.question,
+      blockedBy: target.blockers,
+      reason: "Simulate a fully committed rechart before its event was appended.",
+    }],
+    fog: before.fog.map(({ title }) => title),
+    outOfScope: before.outOfScope,
+    reviewConflicts: [],
+    explorationUpdates: [],
+    summary: "Committed before process exit.",
+    evidenceRefs: [`campaign:${before.revision}`, "location:07:answer"],
+  }, new Set());
+
+  const manager = await ChartingManager.open({
+    store,
+    projectName: "崩溃恢复验证",
+    client: new FakeChartingTransport(new FakeChartingWorld()),
+    wayfinderSkillPath: "/definitely/missing/wayfinder/SKILL.md",
+    autoConnect: false,
+  });
+  context.after(async () => {
+    await manager.close();
+    await store.close();
+  });
+
+  const recovered = manager.getView("charting-crash-adopt")!;
+  assert.equal(recovered.pendingRechart, undefined);
+  assert.equal(recovered.state, "confirmed");
+  assert.equal(recovered.rechartChanges.at(-1)?.id, change.id);
+  assert.equal(store.getSnapshot().campaign.revision, change.sourceRevisionAfter);
+});
+
 class FakeChartingWorld {
   threadStarts = 0;
   turnStarts = 0;
   proposalTurns = 0;
+  threadStartParams: unknown[] = [];
   threads = new Map<string, FakeThread>();
 }
 
@@ -202,6 +316,7 @@ class FakeChartingTransport implements ChartingTransport {
 
   async request<Result>(method: string, params?: unknown): Promise<Result> {
     if (method === "thread/start") {
+      this.#world.threadStartParams.push(structuredClone(params));
       const id = `thread-charting-${++this.#world.threadStarts}`;
       const thread: FakeThread = { id, turns: [] };
       this.#world.threads.set(id, thread);
@@ -261,6 +376,8 @@ class FakeChartingTransport implements ChartingTransport {
       ? JSON.stringify({
         title: "Wayfinder Explorer 首版验证地图",
         destination: "证明 Explorer 能从一个想法形成可审阅的首张地图，并让用户从多个当前可走的 frontier 中选择一处继续探索。",
+        startingState: "从一个尚未包含地图文件的空项目目录开始。",
+        evidenceScope: ["当前项目目录"],
         notes: ["首版只验证绘图与推进地图的模式切换。"],
         tickets: [
           {

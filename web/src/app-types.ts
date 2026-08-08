@@ -15,6 +15,7 @@ import type {
   ChartingView,
   MapCreationPlanView,
 } from "../../src/charting/model.ts";
+import type { AgentApprovalDecision } from "../../src/codex/approval.ts";
 
 export interface CampaignSnapshot {
   sequence: number;
@@ -43,6 +44,13 @@ export interface ExpeditionActions {
   previewMap(chartingId: string, expectedSourceRevision: string): Promise<void>;
   confirmMap(plan: MapCreationPlanView): Promise<void>;
   interruptCharting(chartingId: string): Promise<void>;
+  retryRechart(chartingId: string): Promise<void>;
+  restoreRechartChange(chartingId: string, changeId: string, locationId: string): Promise<void>;
+  resolveChartingApproval(
+    chartingId: string,
+    approvalId: string,
+    decision: AgentApprovalDecision,
+  ): Promise<void>;
   setPlayerFocus(locationId: string): Promise<void>;
   startExpedition(locationId: string): Promise<void>;
   sendMessage(expeditionId: string, message: string): Promise<void>;
@@ -61,12 +69,19 @@ export interface ExpeditionActions {
   relinkProject(projectId: string, root: string): Promise<void>;
   selectDirectory(purpose: DirectoryPickerPurpose): Promise<string | undefined>;
   interrupt(expeditionId: string): Promise<void>;
+  endExpedition(expeditionId: string): Promise<void>;
+  resolveExpeditionApproval(
+    expeditionId: string,
+    approvalId: string,
+    decision: AgentApprovalDecision,
+  ): Promise<void>;
   clearError(): void;
 }
 
 export type ConnectionState = "connecting" | "live" | "reconnecting";
 
 export type Selection =
+  | { kind: "start" }
   | { kind: "location"; id: string }
   | { kind: "destination" }
   | { kind: "fog" };

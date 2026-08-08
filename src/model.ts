@@ -42,6 +42,12 @@ export interface LocationSourceRanges {
   blockers?: SourceRange;
   question?: SourceRange;
   answer?: SourceRange;
+  answerHistory?: SourceRange;
+}
+
+export interface AnswerHistoryEntry {
+  label: string;
+  answerMarkdown: string;
 }
 
 export interface Location {
@@ -54,6 +60,12 @@ export interface Location {
   blockers: string[];
   question: string;
   answerMarkdown?: string;
+  answerHistory: AnswerHistoryEntry[];
+  reviewState: "current" | "pending";
+  reviewQuestion?: string;
+  reviewReason?: string;
+  rechartState: "current" | "pending_delete";
+  pendingDeletionReason?: string;
   dependencyRank: number;
   sourceRanges: LocationSourceRanges;
 }
@@ -62,6 +74,26 @@ export interface Route {
   from: string;
   to: string;
   state: "traveled" | "available" | "locked";
+}
+
+export type MapNodeKind = "start" | "decision" | "destination";
+export type MapNodeState = "current" | "review_pending" | "open" | "arrived";
+
+/** A point that is allowed to appear on the canonical, determined map. */
+export interface MapNode {
+  id: string;
+  kind: MapNodeKind;
+  state: MapNodeState;
+  title: string;
+  locationId?: string;
+  answerMarkdown?: string;
+  answerHistory?: AnswerHistoryEntry[];
+}
+
+/** A route supported by current confirmed answers; open issue dependencies are excluded. */
+export interface DeterminedRoute {
+  from: string;
+  to: string;
 }
 
 export interface TrailStop {
@@ -94,16 +126,20 @@ export interface CampaignProjection {
   revision: string;
   title: string;
   destination: string;
+  startingState: string;
+  evidenceScope: string[];
   outOfScope: string[];
   locations: Location[];
   routes: Route[];
+  mapNodes: MapNode[];
+  determinedRoutes: DeterminedRoute[];
   trail: TrailStop[];
   fog: FogArea[];
   diagnostics: Diagnostic[];
   summary: CampaignSummary;
 }
 
-export type LayoutRegion = "trail" | "frontier" | "gates" | "destination" | "fog";
+export type LayoutRegion = "start" | "trail" | "frontier" | "gates" | "destination" | "fog";
 
 export interface LayoutPoint {
   x: number;
@@ -120,6 +156,7 @@ export interface LayoutBounds {
 
 export interface CampaignLayout {
   version: 1;
+  start: LayoutPoint;
   locations: Record<string, LayoutPoint>;
   destination: LayoutPoint;
   fogEntrance: LayoutPoint;

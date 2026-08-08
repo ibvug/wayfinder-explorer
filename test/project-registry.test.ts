@@ -9,7 +9,7 @@ import { CampaignRegistry } from "../src/project/registry.ts";
 import { campaignIdForRoot } from "../src/wayfinder.ts";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
-const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "../../.scratch/personal-brain-v1");
+const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "fixtures/personal-brain-v1");
 
 test("registers the existing campaign and creates a truly empty selectable project", async (context) => {
   const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-registry-"));

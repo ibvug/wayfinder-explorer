@@ -51,11 +51,19 @@ Campaign ids keep those records attached when a project directory is relinked.
 ## First-map charting
 
 An empty project enters Charting instead of showing a broken or invented map.
-Explorer keeps one persistent Codex task while the player confirms the
-destination, then asks Codex for a breadth-first, structured map proposal with
-candidate tickets, dependencies, fog, and out-of-scope boundaries. The proposal
-must leave at least two dependency-free `grilling` tickets, so the first
-frontier is a real set of choices.
+Explorer keeps one persistent Map Agent session while the player first confirms
+the destination, then agrees the evidence scope and confirms a fixed starting
+state. The first structured map proposal records the natural issues that can
+already be expressed from the gap between those endpoints, their genuine
+dependencies, fog, and out-of-scope boundaries. It does not impose a
+breadth-first layer or invent a complete route. Each issue must represent one
+complete natural decision; Explorer does not split a decision to manufacture
+multiple frontier choices or dependency edges.
+
+The first map has only the start and destination as formal nodes. Unresolved
+issues remain issues, even when selected or claimed. A confirmed answer creates
+the corresponding decision node, then the same Map Agent coordinates the new
+answer across the whole map and re-establishes the current frontier.
 
 The player first reviews the structured proposal and then requests an exact
 preview of the `map.md` and `issues/*.md` files. Preview does not create
