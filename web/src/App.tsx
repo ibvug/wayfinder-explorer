@@ -316,19 +316,27 @@ function ProjectDrawer({
     void operation.then(onClose).catch(() => undefined);
   };
 
+  const drawerTitle = mode === "create"
+    ? "新建项目"
+    : mode === "add"
+      ? "选择已有项目"
+      : mode === "relink"
+        ? "重新关联项目"
+        : "选择一段旅程";
+
   return (
     <div className="project-drawer-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.currentTarget === event.target) {
         onClose();
       }
     }}>
-      <section className="project-drawer" role="dialog" aria-modal="true" aria-label="选择项目">
+      <section className="project-drawer" role="dialog" aria-modal="true" aria-label={drawerTitle}>
         <header>
           <div>
             <p className="ui-eyebrow">CAMPAIGN LIBRARY</p>
-            <h2>选择一段旅程</h2>
+            <h2>{drawerTitle}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭项目选择">×</button>
+          <button type="button" onClick={onClose} aria-label="关闭项目面板">×</button>
         </header>
 
         <div className="project-list">
@@ -359,7 +367,7 @@ function ProjectDrawer({
           <form className="project-create-form" onSubmit={submit}>
             {mode === "create" ? (
               <div className="project-create-form__field">
-                <label htmlFor="project-name">空项目名称</label>
+                <label htmlFor="project-name">项目名称</label>
                 <input
                   id="project-name"
                   value={name}
@@ -374,7 +382,7 @@ function ProjectDrawer({
             <div className="project-create-form__field">
               <label htmlFor="project-root">
                 {mode === "create"
-                  ? "保存位置"
+                  ? "项目父文件夹"
                   : mode === "add"
                     ? "已有项目文件夹"
                     : `「${targetProject?.name}」的新文件夹`}
@@ -384,7 +392,7 @@ function ProjectDrawer({
                   id="project-root"
                   value={root}
                   onChange={(event) => setRoot(event.target.value)}
-                  placeholder="/Users/name/Documents"
+                  placeholder="输入父目录的绝对路径"
                   autoFocus={mode !== "create"}
                   disabled={busy}
                 />
@@ -401,12 +409,12 @@ function ProjectDrawer({
               </div>
               {mode === "create" && root.trim() && name.trim() ? (
                 <small className="project-create-form__preview">
-                  将创建：{root.trim().replace(/\/$/, "")}/{name.trim()}
+                  将创建：{projectPreviewPath(root, name)}
                 </small>
               ) : (
                 <small className="project-create-form__hint">
                   {mode === "create"
-                    ? "项目 Markdown 将保存在你选择的位置；应用数据仍单独保存。"
+                    ? "项目内容保存在新建目录；最近项目列表等设置保存在本机。"
                     : "选择包含 map.md 与 issues/ 的 Wayfinder 项目文件夹，也可以手动输入路径。"}
                 </small>
               )}
@@ -420,7 +428,7 @@ function ProjectDrawer({
                 {busy && !choosingDirectory
                   ? "正在打开…"
                   : mode === "create"
-                    ? "建立空项目"
+                    ? "创建并打开"
                     : mode === "add"
                       ? "添加并打开"
                       : "重新关联"}
@@ -430,7 +438,7 @@ function ProjectDrawer({
         ) : (
           <footer>
             <button type="button" onClick={() => { setMode("create"); setName(""); setRoot(""); }}>
-              <span aria-hidden="true">＋</span> 建立空项目
+              <span aria-hidden="true">＋</span> 新建项目
             </button>
             <button type="button" onClick={beginAdd} disabled={busy}>
               选择已有项目
@@ -1717,6 +1725,12 @@ function projectStatusLabel(project: CampaignProjectView): string {
     return `${project.blockingDiagnostics ?? 0} 个源问题`;
   }
   return "旅程地图";
+}
+
+function projectPreviewPath(parentRoot: string, projectName: string): string {
+  const root = parentRoot.trim().replace(/[\\/]+$/u, "");
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root}${separator}${projectName.trim()}`;
 }
 
 function codexStateLabel(state: CodexConnectionState): string {

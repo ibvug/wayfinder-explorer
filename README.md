@@ -38,7 +38,7 @@ files directly.
 ## Project library
 
 The project title opens a persistent Campaign library. Existing Wayfinder
-directories can be selected with the native macOS folder chooser, added by
+directories can be selected with the native macOS or Windows folder chooser, added by
 absolute path, switched, or relinked after they move. Creating an empty project
 requires both a name and a user-selected parent directory; Explorer creates the
 project folder there and does not hide canonical `map.md` or `issues/*.md`
