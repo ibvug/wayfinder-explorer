@@ -58,9 +58,6 @@ test("rejects hostile Markdown and unresolved evidence references", () => {
 test("a first map accepts one complete natural decision without manufacturing another frontier", () => {
   const proposal = parseMapProposalContent(JSON.stringify({
     title: "单一自然决策",
-    destination: "明确是否以及如何采用一个持久任务运行时。",
-    startingState: "当前只有一个同步脚本。",
-    evidenceScope: ["当前项目目录"],
     notes: [],
     tickets: [{
       key: "choose-runtime-if-needed",
@@ -79,10 +76,18 @@ test("a first map accepts one complete natural decision without manufacturing an
 });
 
 test("first-map instructions follow Explorer issue semantics instead of breadth-first layers", () => {
-  const prompt = buildMapProposalPrompt("Explorer flow", ["turn:charting-1"]);
+  const prompt = buildMapProposalPrompt(
+    "Explorer flow",
+    ["turn:charting-1"],
+    "明确是否采用持久任务运行时。",
+    "当前只有一个同步脚本。",
+    ["当前项目目录"],
+  );
 
   assert.match(prompt, /Wayfinder 只是设计启发，不是绘图契约/);
-  assert.match(prompt, /正式节点只有起点和目的地/);
+  assert.match(prompt, /只有起点和目的地两个节点/);
   assert.match(prompt, /待探索议题，不是地图节点或确定路线/);
+  assert.match(prompt, /输出结构故意没有端点字段/);
+  assert.match(prompt, /预览并明确确认后才写入地图/);
   assert.doesNotMatch(prompt, /采用 Wayfinder 的 breadth-first charting/);
 });

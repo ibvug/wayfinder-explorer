@@ -18,6 +18,7 @@ import type {
   ChartingState,
   ChartingView,
 } from "../../src/charting/model.ts";
+import { canFormFirstMapProposal } from "../../src/charting/model.ts";
 import type {
   AgentApprovalDecision,
   AgentApprovalRequestView,
@@ -29,6 +30,12 @@ import type {
 import { JourneyLog } from "./JourneyLog.tsx";
 import { MarkdownText } from "./MarkdownText.ts";
 import { MapWorld } from "./MapWorld.tsx";
+import {
+  chartingPhaseHeading,
+  ChartingProgressSteps,
+  START_CHARTING_ACTION_LABEL,
+} from "./ChartingProgress.ts";
+import { MessageComposer } from "./MessageComposer.ts";
 import type { ConnectionState, ExpeditionActions, Selection } from "./app-types.ts";
 import { useCampaign } from "./use-campaign.ts";
 
@@ -79,6 +86,10 @@ export function App() {
   );
   const emptyProject = activeProject?.status === "empty";
   const pendingRechart = snapshot.charting?.pendingRechart ?? snapshot.charting?.rechartQueue[0];
+  const destinationSummary = emptyProject
+    ? snapshot.charting?.confirmedDestination?.content ??
+      (snapshot.charting?.destinationDraft ? "目的地草案待确认" : "空项目 · 等待建立目的地")
+    : campaign.destination;
   const progress = campaign.summary.total
     ? Math.round((campaign.summary.resolved / campaign.summary.total) * 100)
     : 0;
@@ -109,7 +120,7 @@ export function App() {
           aria-label="查看完整目的地"
         >
           <span>目的地</span>
-          <strong>{emptyProject ? "空项目 · 等待定义目的地" : campaign.destination}</strong>
+          <strong>{destinationSummary}</strong>
         </button>
 
         <div className="topbar__actions">
@@ -468,28 +479,15 @@ function EmptyProjectStage({
       <div className="empty-project-stage__intro">
         <div className="empty-project-stage__compass" aria-hidden="true"><i /></div>
         <p className="ui-eyebrow">MAP AGENT · 初始绘图</p>
-        <h2>先确认目的地，再确认从哪里出发</h2>
+        <h2>先建立目的地，再建立起点</h2>
         <p>
-          这里还没有 `map.md`。地图 Agent 会先与你确认终点，再确认起点、取证范围和现状基线，随后记录当前能够明确表达的待探索议题、迷雾与范围边界。首张地图只把起点和目的地作为正式节点，不会预先虚构路线。
+          这里还没有 `map.md`。地图 Agent 会先与你建立目的地，再围绕目的地建立起点；探索背景、可作为证据的资料和必要的定向核对都属于建立起点的连续对话。两端建立后，才会记录当前能够明确表达的待探索议题、迷雾与范围边界。首张地图只有起点和目的地两个节点，不会预先虚构路线。
         </p>
         <div className="empty-project-stage__path">
           <span>项目目录</span>
           <code>{project.root}</code>
         </div>
-        <ol className="charting-phases">
-          <li className={!charting?.proposal ? "is-current" : "is-done"}>
-            <b>01</b><span><strong>确认目的地</strong><small>明确可观察结果与边界</small></span>
-          </li>
-          <li className={!charting?.proposal ? "is-current" : "is-done"}>
-            <b>02</b><span><strong>确认起点</strong><small>先约定取证范围，再定向核对现状</small></span>
-          </li>
-          <li className={charting?.proposal ? "is-current" : ""}>
-            <b>03</b><span><strong>绘制首张地图</strong><small>议题仍是议题，不提前生成节点或路线</small></span>
-          </li>
-          <li>
-            <b>04</b><span><strong>逐题探索并重绘</strong><small>答案确认后才成为节点，由地图 Agent 协调整张图</small></span>
-          </li>
-        </ol>
+        <ChartingProgressSteps phase={charting?.phase ?? "destination"} />
       </div>
       <ChartingPanel
         campaign={campaign}
@@ -517,7 +515,7 @@ function ChartingPanel({
   const busyTarget = charting ? `charting:${charting.id}` : "charting:start";
   const busy = actions.busyTarget === busyTarget;
   const canReply = charting?.state === "awaiting_player" || charting?.state === "failed";
-  const canFormProposal = canReply && charting.messages.some(({ role }) => role === "player");
+  const canFormProposal = Boolean(charting && canFormFirstMapProposal(charting));
 
   useEffect(() => {
     const element = transcript.current;
@@ -526,8 +524,7 @@ function ChartingPanel({
     }
   }, [charting?.messages.length, charting?.streamingMessage?.text]);
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const submit = () => {
     const message = draft.trim();
     if (!charting || !message || busy) {
       return;
@@ -542,7 +539,7 @@ function ChartingPanel({
       <header className="expedition-panel__header">
         <div>
           <p className="expedition-panel__eyebrow"><span aria-hidden="true" /> MAP AGENT · CHARTING</p>
-          <h3>{charting ? "地图 Agent 正在与你确认首张地图" : "从一个目标开始探索"}</h3>
+          <h3>{charting ? chartingPhaseHeading(charting.phase) : "从一个目标开始探索"}</h3>
         </div>
         <ChartingStateBadge codex={codex} charting={charting} />
       </header>
@@ -556,7 +553,7 @@ function ChartingPanel({
             onClick={() => void actions.startCharting().catch(() => undefined)}
             disabled={busy}
           >
-            <span aria-hidden="true">✦</span>{busy ? "正在连接地图 Agent…" : "开始确认目的地"}
+            <span aria-hidden="true">✦</span>{busy ? "正在连接地图 Agent…" : START_CHARTING_ACTION_LABEL}
           </button>
           {codex.state !== "ready" ? <small>{codex.error ?? "点击后会尝试连接本机 Codex。"}</small> : null}
           {actions.error ? (
@@ -611,6 +608,21 @@ function ChartingPanel({
             />
           ) : null}
 
+          <ChartingEndpointCards
+            charting={charting}
+            busy={busy}
+            canConfirm={canReply}
+            onConfirmDestination={(draftId) => void actions.confirmDestination(
+              charting.id,
+              draftId,
+            ).catch(() => undefined)}
+            onConfirmStartingPoint={(draftId, evidenceVersion) => void actions.confirmStartingPoint(
+              charting.id,
+              draftId,
+              evidenceVersion,
+            ).catch(() => undefined)}
+          />
+
           {charting.proposal && (charting.state === "returned" || charting.state === "previewing") ? (
             <MapProposalCard
               charting={charting}
@@ -624,36 +636,27 @@ function ChartingPanel({
           ) : null}
 
           {canReply ? (
-            <form className="expedition-composer" onSubmit={submit}>
-              <label htmlFor={`charting-reply-${charting.id}`}>你的回答</label>
-              <textarea
-                id={`charting-reply-${charting.id}`}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="写下你的目标、边界、反例或担心混淆的地方…"
-                rows={3}
-                maxLength={8_000}
-                disabled={busy}
-              />
-              <div>
-                <small>继续同一个地图 Agent 会话</small>
-                <span className="expedition-composer__actions">
-                  {canFormProposal ? (
-                    <button
-                      type="button"
-                      className="is-secondary"
-                      onClick={() => void actions.formMapProposal(charting.id).catch(() => undefined)}
-                      disabled={busy}
-                    >
-                      形成首张地图草案
-                    </button>
-                  ) : null}
-                  <button type="submit" disabled={!draft.trim() || busy}>
-                    {busy ? "正在送达…" : "继续绘图"}<span aria-hidden="true">↗</span>
-                  </button>
-                </span>
-              </div>
-            </form>
+            <MessageComposer
+              id={`charting-reply-${charting.id}`}
+              label="你的回答"
+              value={draft}
+              onChange={setDraft}
+              onSubmit={submit}
+              placeholder="写下你的目标、边界、反例或担心混淆的地方…"
+              context="继续同一个地图 Agent 会话"
+              disabled={busy}
+              busy={busy}
+              secondaryAction={canFormProposal ? (
+                <button
+                  type="button"
+                  className="is-secondary"
+                  onClick={() => void actions.formMapProposal(charting.id).catch(() => undefined)}
+                  disabled={busy}
+                >
+                  形成首张地图草案
+                </button>
+              ) : undefined}
+            />
           ) : charting.state === "exploring" || charting.state === "awaiting_approval" || charting.state === "returning" ? (
             <div className="expedition-running">
               <span>{charting.state === "returning" ? "正在形成可审阅的首张地图草案" : "等待地图 Agent 完成本轮"}</span>
@@ -669,6 +672,82 @@ function ChartingPanel({
         </>
       )}
     </article>
+  );
+}
+
+function ChartingEndpointCards({
+  charting,
+  busy,
+  canConfirm,
+  onConfirmDestination,
+  onConfirmStartingPoint,
+}: {
+  charting: ChartingView;
+  busy: boolean;
+  canConfirm: boolean;
+  onConfirmDestination(draftId: string): void;
+  onConfirmStartingPoint(draftId: string, evidenceVersion: string): void;
+}) {
+  const destination = charting.confirmedDestination;
+  const startingPoint = charting.confirmedStartingPoint;
+  const destinationDraft = !destination ? charting.destinationDraft : undefined;
+  const startingPointDraft = destination && !startingPoint ? charting.startingPointDraft : undefined;
+  if (!destination && !destinationDraft && !startingPointDraft) {
+    return null;
+  }
+  return (
+    <section className="endpoint-cards" aria-label="目的地与起点">
+      {destination ? (
+        <article className="endpoint-card is-confirmed">
+          <header><span>目的地</span><b>已确认</b></header>
+          <MarkdownText markdown={destination.content} />
+        </article>
+      ) : destinationDraft ? (
+        <article className="endpoint-card is-draft">
+          <header><span>目的地草案</span><b>等待你的明确确认</b></header>
+          <MarkdownText markdown={destinationDraft.content} />
+          <div className="proposal-actions">
+            <button type="button" className="writeback-confirm" onClick={() =>
+              onConfirmDestination(destinationDraft.id)} disabled={busy || !canConfirm}>
+              {busy ? "正在保存目的地…" : "确认目的地"}
+            </button>
+          </div>
+        </article>
+      ) : null}
+
+      {startingPoint ? (
+        <article className="endpoint-card is-confirmed">
+          <header><span>起点</span><b>已确认并冻结</b></header>
+          <MarkdownText markdown={startingPoint.summary} />
+          <details className="proposal-details">
+            <summary>查看形成依据与证据版本</summary>
+            <ProposalDetail label="取证范围" items={startingPoint.evidenceScope} />
+            <ProposalDetail label="项目内证据" items={startingPoint.evidencePaths} />
+            <ProposalDetail label="对话证据" items={startingPoint.evidenceRefs} />
+            <p><small>证据版本：{startingPoint.evidenceVersion}</small></p>
+          </details>
+        </article>
+      ) : startingPointDraft ? (
+        <article className="endpoint-card is-draft">
+          <header><span>起点草案</span><b>等待你的明确确认</b></header>
+          <MarkdownText markdown={startingPointDraft.summary} />
+          <details className="proposal-details">
+            <summary>查看形成依据与证据版本</summary>
+            <ProposalDetail label="取证范围" items={startingPointDraft.evidenceScope} />
+            <ProposalDetail label="项目内证据" items={startingPointDraft.evidencePaths} />
+            <ProposalDetail label="对话证据" items={startingPointDraft.evidenceRefs} />
+            <p><small>证据版本：{startingPointDraft.evidenceVersion}</small></p>
+          </details>
+          <div className="proposal-actions">
+            <button type="button" className="writeback-confirm" onClick={() =>
+              onConfirmStartingPoint(startingPointDraft.id, startingPointDraft.evidenceVersion)
+            } disabled={busy || !canConfirm}>
+              {busy ? "正在校验证据…" : "确认起点"}
+            </button>
+          </div>
+        </article>
+      ) : null}
+    </section>
   );
 }
 
@@ -730,7 +809,10 @@ function MapProposalCard({
         <span>{proposal.tickets.length} 个 ticket</span>
       </header>
       <div className="map-proposal-destination">
-        <b>目的地</b><p>{proposal.destination}</p>
+        <b>已确认目的地</b><p>{proposal.destination}</p>
+      </div>
+      <div className="map-proposal-destination">
+        <b>已确认起点</b><p>{proposal.startingState}</p>
       </div>
       <ol className="map-proposal-tickets">
         {proposal.tickets.map((ticket, index) => (
@@ -1089,8 +1171,7 @@ function ExpeditionPanel({
     void actions.startExpedition(location.id).catch(() => undefined);
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const submit = () => {
     const message = draft.trim();
     if (!expedition || !message || busy) {
       return;
@@ -1276,36 +1357,27 @@ function ExpeditionPanel({
           ) : null}
 
           {canReply ? (
-            <form className="expedition-composer" onSubmit={submit}>
-              <label htmlFor={`expedition-reply-${expedition.id}`}>你的回答</label>
-              <textarea
-                id={`expedition-reply-${expedition.id}`}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="写下你的判断、疑问或反例…"
-                rows={3}
-                maxLength={8_000}
-                disabled={busy}
-              />
-              <div>
-                <small>继续同一个 Codex 任务</small>
-                <span className="expedition-composer__actions">
-                  {canFormProposal ? (
-                    <button
-                      type="button"
-                      className="is-secondary"
-                      onClick={formProposal}
-                      disabled={busy}
-                    >
-                      形成草案
-                    </button>
-                  ) : null}
-                  <button type="submit" disabled={!draft.trim() || busy}>
-                    {busy ? "正在送达…" : "继续探索"}<span aria-hidden="true">↗</span>
-                  </button>
-                </span>
-              </div>
-            </form>
+            <MessageComposer
+              id={`expedition-reply-${expedition.id}`}
+              label="你的回答"
+              value={draft}
+              onChange={setDraft}
+              onSubmit={submit}
+              placeholder="写下你的判断、疑问或反例…"
+              context="继续同一个探索 Agent 会话"
+              disabled={busy}
+              busy={busy}
+              secondaryAction={canFormProposal ? (
+                <button
+                  type="button"
+                  className="is-secondary"
+                  onClick={formProposal}
+                  disabled={busy}
+                >
+                  形成草案
+                </button>
+              ) : undefined}
+            />
           ) : expedition.state === "exploring" || expedition.state === "awaiting_approval" || expedition.state === "returning" ? (
             <div className="expedition-running">
               <span>

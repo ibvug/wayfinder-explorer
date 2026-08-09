@@ -334,6 +334,28 @@ test("exposes the empty-project Charting conversation, proposal, preview, and co
   assert.equal(answered.statusCode, 200);
   assert.equal(answered.json().charting.messages.at(-1).role, "player");
 
+  const destinationConfirmed = await explorer.app.inject({
+    method: "POST",
+    url: `/api/charting/${started.json().charting.id}/destination/confirm`,
+    headers,
+    payload: { snapshotVersion: 1, draftId: "destination-draft-stub" },
+  });
+  assert.equal(destinationConfirmed.statusCode, 200);
+  assert.equal(destinationConfirmed.json().charting.phase, "starting_state");
+
+  const startingPointConfirmed = await explorer.app.inject({
+    method: "POST",
+    url: `/api/charting/${started.json().charting.id}/starting-point/confirm`,
+    headers,
+    payload: {
+      snapshotVersion: 1,
+      draftId: "starting-point-draft-stub",
+      evidenceVersion: "sha256:evidence-stub",
+    },
+  });
+  assert.equal(startingPointConfirmed.statusCode, 200);
+  assert.equal(startingPointConfirmed.json().charting.phase, "ready_for_proposal");
+
   const proposed = await explorer.app.inject({
     method: "POST",
     url: `/api/charting/${started.json().charting.id}/proposal`,
@@ -612,6 +634,13 @@ class StubChartingService implements ChartingService {
       campaignId,
       threadId: "thread-charting-stub",
       state: "awaiting_player",
+      phase: "destination",
+      destinationDraft: {
+        id: "destination-draft-stub",
+        content: "验证空项目建图。",
+        sourceTurnId: "turn-destination-stub",
+        createdAt: "2026-08-04T00:00:00.000Z",
+      },
       messages: [],
       rechartQueue: [],
       rechartChanges: [],
@@ -648,6 +677,39 @@ class StubChartingService implements ChartingService {
       text,
       createdAt: "2026-08-04T00:00:01.000Z",
     });
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async confirmDestination(_chartingId: string, draftId: string) {
+    this.#view.confirmedDestination = {
+      draftId,
+      content: this.#view.destinationDraft!.content,
+      confirmedAt: "2026-08-04T00:00:01.500Z",
+    };
+    this.#view.phase = "starting_state";
+    this.#view.startingPointDraft = {
+      id: "starting-point-draft-stub",
+      summary: "当前项目目录为空。",
+      evidenceScope: ["当前项目目录"],
+      evidencePaths: [],
+      evidenceRefs: ["turn:starting-point-stub"],
+      evidenceVersion: "sha256:evidence-stub",
+      sourceTurnId: "turn-starting-point-stub",
+      createdAt: "2026-08-04T00:00:01.500Z",
+    };
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async confirmStartingPoint(_chartingId: string, draftId: string, evidenceVersion: string) {
+    this.#view.confirmedStartingPoint = {
+      ...this.#view.startingPointDraft!,
+      draftId,
+      evidenceVersion,
+      confirmedAt: "2026-08-04T00:00:01.750Z",
+    };
+    this.#view.phase = "ready_for_proposal";
     this.#publish();
     return structuredClone(this.#view);
   }

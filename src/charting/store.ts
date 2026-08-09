@@ -6,11 +6,16 @@ import type { CampaignProjection } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
 import type {
   ChartingMessage,
+  ChartingPhase,
   ChartingRecord,
   ChartingState,
+  ConfirmedDestination,
+  ConfirmedStartingPoint,
+  DestinationDraft,
   MapProposal,
   RechartChangeView,
   RechartTriggerKind,
+  StartingPointDraft,
 } from "./model.ts";
 
 interface ChartingEventBase {
@@ -20,9 +25,11 @@ interface ChartingEventBase {
   sourceRevision: string;
 }
 
+type PersistedChartingPhase = ChartingPhase | "evidence_scope";
+
 interface ChartingStartedEvent extends ChartingEventBase {
   type: "charting_started";
-  payload: { chartingId: string; threadId: string };
+  payload: { chartingId: string; threadId: string; phase?: PersistedChartingPhase };
 }
 
 interface ChartingStateChangedEvent extends ChartingEventBase {
@@ -38,6 +45,40 @@ interface ChartingStateChangedEvent extends ChartingEventBase {
 interface ChartingMessageRecordedEvent extends ChartingEventBase {
   type: "charting_message_recorded";
   payload: { chartingId: string; message: ChartingMessage };
+}
+
+interface ChartingTurnRecordedEvent extends ChartingEventBase {
+  type: "charting_turn_recorded";
+  payload: {
+    chartingId: string;
+    message: ChartingMessage;
+    phase: PersistedChartingPhase;
+  };
+}
+
+interface DestinationDraftRecordedEvent extends ChartingEventBase {
+  type: "destination_draft_recorded";
+  payload: { chartingId: string; draft: DestinationDraft };
+}
+
+interface DestinationConfirmedEvent extends ChartingEventBase {
+  type: "destination_confirmed";
+  payload: { chartingId: string; destination: ConfirmedDestination };
+}
+
+interface StartingPointDraftRecordedEvent extends ChartingEventBase {
+  type: "starting_point_draft_recorded";
+  payload: { chartingId: string; draft: StartingPointDraft };
+}
+
+interface StartingPointDraftInvalidatedEvent extends ChartingEventBase {
+  type: "starting_point_draft_invalidated";
+  payload: { chartingId: string; draftId: string; reason: string };
+}
+
+interface StartingPointConfirmedEvent extends ChartingEventBase {
+  type: "starting_point_confirmed";
+  payload: { chartingId: string; startingPoint: ConfirmedStartingPoint };
 }
 
 interface MapProposalReturnedEvent extends ChartingEventBase {
@@ -97,6 +138,12 @@ export type ChartingEvent =
   | ChartingStartedEvent
   | ChartingStateChangedEvent
   | ChartingMessageRecordedEvent
+  | ChartingTurnRecordedEvent
+  | DestinationDraftRecordedEvent
+  | DestinationConfirmedEvent
+  | StartingPointDraftRecordedEvent
+  | StartingPointDraftInvalidatedEvent
+  | StartingPointConfirmedEvent
   | MapProposalReturnedEvent
   | MapCreationConfirmedEvent
   | RechartRequestedEvent
@@ -161,7 +208,7 @@ export class ChartingStore {
     const event: ChartingStartedEvent = {
       ...this.#eventBase(),
       type: "charting_started",
-      payload: { chartingId, threadId },
+      payload: { chartingId, threadId, phase: "destination" },
     };
     await this.#append(event);
     return this.get(chartingId)!;
@@ -193,6 +240,92 @@ export class ChartingStore {
       ...this.#eventBase(),
       type: "charting_message_recorded",
       payload: { chartingId, message },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async recordAgentTurn(
+    chartingId: string,
+    message: ChartingMessage,
+    phase: ChartingPhase,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: ChartingTurnRecordedEvent = {
+      ...this.#eventBase(),
+      type: "charting_turn_recorded",
+      payload: { chartingId, message, phase },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async recordDestinationDraft(
+    chartingId: string,
+    draft: DestinationDraft,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: DestinationDraftRecordedEvent = {
+      ...this.#eventBase(),
+      type: "destination_draft_recorded",
+      payload: { chartingId, draft },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async confirmDestination(
+    chartingId: string,
+    destination: ConfirmedDestination,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: DestinationConfirmedEvent = {
+      ...this.#eventBase(),
+      type: "destination_confirmed",
+      payload: { chartingId, destination },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async recordStartingPointDraft(
+    chartingId: string,
+    draft: StartingPointDraft,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: StartingPointDraftRecordedEvent = {
+      ...this.#eventBase(),
+      type: "starting_point_draft_recorded",
+      payload: { chartingId, draft },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async invalidateStartingPointDraft(
+    chartingId: string,
+    draftId: string,
+    reason: string,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: StartingPointDraftInvalidatedEvent = {
+      ...this.#eventBase(),
+      type: "starting_point_draft_invalidated",
+      payload: { chartingId, draftId, reason },
+    };
+    await this.#append(event);
+    return this.get(chartingId)!;
+  }
+
+  async confirmStartingPoint(
+    chartingId: string,
+    startingPoint: ConfirmedStartingPoint,
+  ): Promise<ChartingRecord> {
+    this.#requireRecord(chartingId);
+    const event: StartingPointConfirmedEvent = {
+      ...this.#eventBase(),
+      type: "starting_point_confirmed",
+      payload: { chartingId, startingPoint },
     };
     await this.#append(event);
     return this.get(chartingId)!;
@@ -342,6 +475,16 @@ export class ChartingStore {
       }
       this.#apply(decoded);
     }
+    for (const record of this.#records.values()) {
+      if (record.mapCreatedAt) {
+        continue;
+      }
+      record.phase = record.confirmedStartingPoint
+        ? "ready_for_proposal"
+        : record.confirmedDestination
+          ? "starting_state"
+          : "destination";
+    }
   }
 
   #apply(event: ChartingEvent): void {
@@ -352,6 +495,7 @@ export class ChartingStore {
           campaignId: event.campaignId,
           threadId: event.payload.threadId,
           state: "created",
+          phase: normalizePersistedChartingPhase(event.payload.phase ?? "unresolved"),
           messages: [],
           rechartQueue: [],
           rechartChanges: [],
@@ -372,6 +516,40 @@ export class ChartingStore {
       record.updatedAt = event.timestamp;
       return;
     }
+    if (event.type === "charting_turn_recorded") {
+      record.phase = normalizePersistedChartingPhase(event.payload.phase);
+      appendMessage(record, event.payload.message, event.timestamp);
+      return;
+    }
+    if (event.type === "destination_draft_recorded") {
+      record.destinationDraft = structuredClone(event.payload.draft);
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "destination_confirmed") {
+      record.confirmedDestination = structuredClone(event.payload.destination);
+      record.phase = "starting_state";
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "starting_point_draft_recorded") {
+      record.startingPointDraft = structuredClone(event.payload.draft);
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "starting_point_draft_invalidated") {
+      if (record.startingPointDraft?.id === event.payload.draftId) {
+        record.startingPointDraft = undefined;
+      }
+      record.updatedAt = event.timestamp;
+      return;
+    }
+    if (event.type === "starting_point_confirmed") {
+      record.confirmedStartingPoint = structuredClone(event.payload.startingPoint);
+      record.phase = "ready_for_proposal";
+      record.updatedAt = event.timestamp;
+      return;
+    }
     if (event.type === "map_proposal_returned") {
       record.proposal = structuredClone(event.payload.proposal);
       record.state = "returned";
@@ -381,6 +559,27 @@ export class ChartingStore {
       return;
     }
     if (event.type === "map_creation_confirmed") {
+      if (record.proposal && !record.confirmedDestination) {
+        record.confirmedDestination = {
+          draftId: `legacy-map:${record.proposal.id}:destination`,
+          content: record.proposal.destination,
+          confirmedAt: event.timestamp,
+        };
+      }
+      if (record.proposal && !record.confirmedStartingPoint) {
+        record.confirmedStartingPoint = {
+          id: `legacy-map:${record.proposal.id}:starting-point`,
+          draftId: `legacy-map:${record.proposal.id}:starting-point`,
+          summary: record.proposal.startingState,
+          evidenceScope: [...record.proposal.evidenceScope],
+          evidencePaths: [],
+          evidenceRefs: [...record.proposal.evidenceRefs],
+          evidenceVersion: "legacy:map-confirmation",
+          sourceTurnId: record.proposal.sourceTurnId,
+          createdAt: record.proposal.createdAt,
+          confirmedAt: event.timestamp,
+        };
+      }
       record.state = "confirmed";
       record.mapCreatedAt = event.timestamp;
       record.activeTurnId = undefined;
@@ -437,20 +636,7 @@ export class ChartingStore {
       record.updatedAt = event.timestamp;
       return;
     }
-    const message = event.payload.message;
-    const duplicate = record.messages.some((candidate) =>
-      candidate.id === message.id ||
-      (
-        message.role === "guide" &&
-        candidate.role === "guide" &&
-        message.turnId &&
-        candidate.turnId === message.turnId &&
-        candidate.text.trim() === message.text.trim()
-      ));
-    if (!duplicate) {
-      record.messages.push(structuredClone(message));
-      record.updatedAt = event.timestamp;
-    }
+    appendMessage(record, event.payload.message, event.timestamp);
   }
 }
 
@@ -467,7 +653,8 @@ function isChartingEvent(value: unknown, campaignId: string): value is ChartingE
     return false;
   }
   if (value.type === "charting_started") {
-    return typeof value.payload.threadId === "string";
+    return typeof value.payload.threadId === "string" &&
+      (value.payload.phase === undefined || isPersistedChartingPhase(value.payload.phase));
   }
   if (value.type === "charting_state_changed") {
     return isChartingState(value.payload.state) &&
@@ -476,6 +663,24 @@ function isChartingEvent(value: unknown, campaignId: string): value is ChartingE
   }
   if (value.type === "charting_message_recorded") {
     return isChartingMessage(value.payload.message);
+  }
+  if (value.type === "charting_turn_recorded") {
+    return isChartingMessage(value.payload.message) && isPersistedChartingPhase(value.payload.phase);
+  }
+  if (value.type === "destination_draft_recorded") {
+    return isDestinationDraft(value.payload.draft);
+  }
+  if (value.type === "destination_confirmed") {
+    return isConfirmedDestination(value.payload.destination);
+  }
+  if (value.type === "starting_point_draft_recorded") {
+    return isStartingPointDraft(value.payload.draft);
+  }
+  if (value.type === "starting_point_draft_invalidated") {
+    return typeof value.payload.draftId === "string" && typeof value.payload.reason === "string";
+  }
+  if (value.type === "starting_point_confirmed") {
+    return isConfirmedStartingPoint(value.payload.startingPoint);
   }
   if (value.type === "map_proposal_returned") {
     return isRecord(value.payload.proposal);
@@ -538,6 +743,39 @@ function isChartingMessage(value: unknown): value is ChartingMessage {
     (value.turnId === undefined || typeof value.turnId === "string");
 }
 
+function isDestinationDraft(value: unknown): value is DestinationDraft {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.content === "string" &&
+    typeof value.sourceTurnId === "string" &&
+    typeof value.createdAt === "string";
+}
+
+function isConfirmedDestination(value: unknown): value is ConfirmedDestination {
+  return isRecord(value) &&
+    typeof value.draftId === "string" &&
+    typeof value.content === "string" &&
+    typeof value.confirmedAt === "string";
+}
+
+function isStartingPointDraft(value: unknown): value is StartingPointDraft {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.summary === "string" &&
+    Array.isArray(value.evidenceScope) && value.evidenceScope.every((item) => typeof item === "string") &&
+    Array.isArray(value.evidencePaths) && value.evidencePaths.every((item) => typeof item === "string") &&
+    Array.isArray(value.evidenceRefs) && value.evidenceRefs.every((item) => typeof item === "string") &&
+    typeof value.evidenceVersion === "string" &&
+    typeof value.sourceTurnId === "string" &&
+    typeof value.createdAt === "string";
+}
+
+function isConfirmedStartingPoint(value: unknown): value is ConfirmedStartingPoint {
+  return isStartingPointDraft(value) &&
+    typeof (value as Partial<ConfirmedStartingPoint>).draftId === "string" &&
+    typeof (value as Partial<ConfirmedStartingPoint>).confirmedAt === "string";
+}
+
 function isChartingState(value: unknown): value is ChartingState {
   return value === "created" ||
     value === "exploring" ||
@@ -552,6 +790,34 @@ function isChartingState(value: unknown): value is ChartingState {
     value === "recharting" ||
     value === "rechart_failed" ||
     value === "orphaned";
+}
+
+function isPersistedChartingPhase(value: unknown): value is PersistedChartingPhase {
+  return value === "unresolved" ||
+    value === "destination" ||
+    value === "evidence_scope" ||
+    value === "starting_state" ||
+    value === "ready_for_proposal";
+}
+
+function normalizePersistedChartingPhase(phase: PersistedChartingPhase): ChartingPhase {
+  return phase === "evidence_scope" ? "starting_state" : phase;
+}
+
+function appendMessage(record: ChartingRecord, message: ChartingMessage, timestamp: string): void {
+  const duplicate = record.messages.some((candidate) =>
+    candidate.id === message.id ||
+    (
+      message.role === "guide" &&
+      candidate.role === "guide" &&
+      message.turnId &&
+      candidate.turnId === message.turnId &&
+      candidate.text.trim() === message.text.trim()
+    ));
+  if (!duplicate) {
+    record.messages.push(structuredClone(message));
+  }
+  record.updatedAt = timestamp;
 }
 
 function isMissingFileError(error: unknown): boolean {

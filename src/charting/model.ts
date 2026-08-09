@@ -16,6 +16,20 @@ export type ChartingState =
   | "rechart_failed"
   | "orphaned";
 
+/**
+ * Explorer-owned stage of endpoint establishment before the first map.
+ * `unresolved` is reserved for conversations persisted before endpoint events
+ * existed; no user operation is unlocked from that compatibility state.
+ */
+export type ChartingPhase =
+  | "unresolved"
+  | "destination"
+  | "starting_state"
+  | "ready_for_proposal";
+
+/** Compatibility type for old Map-Agent envelopes that reported a phase. */
+export type LegacyReportedChartingPhase = Exclude<ChartingPhase, "unresolved">;
+
 export type ChartingMessageRole = "player" | "guide";
 
 export interface ChartingMessage {
@@ -24,6 +38,39 @@ export interface ChartingMessage {
   text: string;
   createdAt: string;
   turnId?: string;
+}
+
+/** Map-Agent wording offered for the Explorer's explicit destination confirmation. */
+export interface DestinationDraft {
+  id: string;
+  content: string;
+  sourceTurnId: string;
+  createdAt: string;
+}
+
+/** Destination content accepted through the dedicated Explorer operation. */
+export interface ConfirmedDestination {
+  draftId: string;
+  content: string;
+  confirmedAt: string;
+}
+
+/** Evidence-bound current-state summary offered for explicit starting-point confirmation. */
+export interface StartingPointDraft {
+  id: string;
+  summary: string;
+  evidenceScope: string[];
+  evidencePaths: string[];
+  evidenceRefs: string[];
+  evidenceVersion: string;
+  sourceTurnId: string;
+  createdAt: string;
+}
+
+/** Frozen starting-point baseline accepted while its evidence version was still current. */
+export interface ConfirmedStartingPoint extends StartingPointDraft {
+  draftId: string;
+  confirmedAt: string;
 }
 
 export interface MapTicketProposal {
@@ -46,6 +93,12 @@ export interface MapProposalContent {
   outOfScope: string[];
   evidenceRefs: string[];
 }
+
+/** Model-authored first-map content; confirmed endpoints are attached by Explorer. */
+export type MapProposalDraftContent = Omit<
+  MapProposalContent,
+  "destination" | "startingState" | "evidenceScope"
+>;
 
 /** Model-authored map content plus metadata trusted and attached by Explorer. */
 export interface MapProposal extends MapProposalContent {
@@ -86,6 +139,11 @@ export interface ChartingRecord {
   campaignId: string;
   threadId: string;
   state: ChartingState;
+  phase: ChartingPhase;
+  destinationDraft?: DestinationDraft;
+  confirmedDestination?: ConfirmedDestination;
+  startingPointDraft?: StartingPointDraft;
+  confirmedStartingPoint?: ConfirmedStartingPoint;
   activeTurnId?: string;
   messages: ChartingMessage[];
   proposal?: MapProposal;
@@ -206,4 +264,11 @@ export interface ChartingView extends ChartingRecord {
 
 export function isTerminalChartingState(state: ChartingState): boolean {
   return state === "confirmed" || state === "orphaned";
+}
+
+export function canFormFirstMapProposal(charting: ChartingRecord): boolean {
+  return charting.phase === "ready_for_proposal" &&
+    Boolean(charting.confirmedDestination) &&
+    Boolean(charting.confirmedStartingPoint) &&
+    (charting.state === "awaiting_player" || charting.state === "failed");
 }

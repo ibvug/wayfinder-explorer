@@ -39,6 +39,8 @@ export interface ExpeditionActions {
   error?: string;
   startCharting(): Promise<void>;
   sendChartingMessage(chartingId: string, message: string): Promise<void>;
+  confirmDestination(chartingId: string, draftId: string): Promise<void>;
+  confirmStartingPoint(chartingId: string, draftId: string, evidenceVersion: string): Promise<void>;
   formMapProposal(chartingId: string): Promise<void>;
   resumeMapProposal(chartingId: string): Promise<void>;
   previewMap(chartingId: string, expectedSourceRevision: string): Promise<void>;

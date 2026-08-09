@@ -1,14 +1,39 @@
 # Spec：已确认答案修订与 Explorer 侧影响协调
 
 Status: ready-for-agent
+Implementation status: partial
 
 ## Problem Statement
 
-探索者在一次目标探索中会不断获得新认识，但 Explorer 当前把确认答案视为不可替换的终点：已经带有 Answer 的议题不能再次写回，已经确认的探索也不能继续形成替代答案。探索者如果发现早先判断不再支持抵达目的地，只能手工修改 Wayfinder Markdown、建立新的目标探索，或者让地图继续展示已经失效的确定路线。
+Explorer 已经交付基础答案修订能力，不再把确认答案视为不可替换的终点。探索者现在可以在同一次目标探索中重新打开已确认节点、形成替代草案并明确确认；存在既有 confirmed Expedition 记录时会继续原探索会话，没有历史会话记录的旧 Markdown 节点则从新的修订会话开始。当前答案、不可变答案历史、同一地图节点、稳定布局位置和待复核投影也已经成立。直接答案写回具有精确 revision 校验、原子文件替换和恢复 journal，确认后的重新绘图失败会保留答案并进入可重试的待重新绘图状态。
 
-手工修正不仅会丢失旧答案的历史，还会把一致性维护责任推给探索者。上游答案变化可能影响已确认答案、尚未开始的议题、正在探索状态、答案草案、路线和当前前沿；探索者无法可靠地逐项找出并同步所有显式依赖与语义关联。当前投影也只有 open/resolved 两种来源状态，无法表达“节点仍然存在，但它的答案因真实冲突而待复核”，因此一旦允许修订，地图很容易在节点身份、确定路线和抵达判定之间自相矛盾。
+剩余问题集中在完整影响协调边界，而不是基础修订写回。当前确认前预览主要展示直接答案与地图账本变化，尚未把议题、关系、路线、迷雾、正在探索状态和答案草案的协调结果组成同一个不可变计划；确认写回与重新绘图请求仍由 HTTP 层跨管理器串联，确认队列、崩溃交接和协调提案耐久复用尚未封闭。相关探索上下文也必须等完整提案通过校验并安全应用后再被消费，已确认节点的可推导关系变化和旧草案历史仍需进入正式协调模型。若不补齐这些边界，系统仍可能在崩溃、并发确认、重试或复杂关系变化下展示未协调的前沿，或让探索会话消费最终被拒绝的提案。
 
-本 spec 先实现 Explorer 一侧的完整修订、协调提案验证、预览、确认、持久化和恢复流程，并只通过最高层 HTTP/API seam 验收。验收测试使用确定性的 fake 提供地图变化提案，不启动真实 Agent 或 Codex。真实 Agent 运行时适配器及其独立契约测试留给后续 spec。
+本 spec 保留 Explorer 一侧完整修订、协调提案验证、统一预览、确认串行、持久化和恢复流程作为目标，并通过最高层 HTTP/API seam 验收剩余交付。验收测试使用确定性的 fake 提供地图变化提案，不启动真实 Agent 或 Codex；当前生产使用的真实 Agent 运行时适配器及其独立契约不由本 spec 扩展或验收。
+
+## Implementation Status
+
+Delivery status: **partial**. `Status: ready-for-agent` 表示本文的目标规格已经可以继续实施，不表示全部验收已经交付。
+
+### 已交付
+
+- 已确认节点可以在同一次目标探索中重新打开；存在既有 confirmed Expedition 记录时，会在原 Expedition、Agent 会话和对话历史上继续形成修订草案。只有旧 Markdown 答案而没有历史会话记录时会建立新的修订会话。
+- 当前答案在讨论和预览期间继续可见；确认替代答案后，旧答案追加到不可变历史，替代答案成为当前答案。待复核答案也可以在同一流程中原样确认或修订。
+- 修订与复核保留同一地图节点身份和 overlay 坐标；待复核状态保留节点与答案历史、退出确定路线并阻止抵达。
+- 直接答案写回使用精确 source revision、proposal hash 和受影响文件内容进行 compare-and-swap；外部编辑使旧计划失效且不会被覆盖。
+- 直接写回具备原子文件替换和恢复 journal；旧单 Answer Campaign 可按一个当前答案版本读取。
+- 确认后的重新绘图具备结构化 proposal 基础校验、待重新绘图投影、自动和立即重试、重绘请求队列、待删除议题复评以及最近一次变化恢复。
+
+### 剩余交付
+
+- 把候选答案、完整地图协调 proposal、精确 revision、所有受影响内容摘要和最终内存投影组成一个确认前可见的不可变预览计划；预览必须覆盖议题、关系、确定路线、迷雾、前沿、正在探索状态、答案草案、真实冲突和不变内容。
+- 让每项协调变化携带可验证的证据和规范化原因类别，并拒绝没有逐项依据的过宽变更或无谓 churn；当前只有 proposal 顶层 `evidenceRefs` 和逐项自由文本 `reason`。
+- 从确认入口开始串行处理同一 Campaign 的确认，而不是只排队重新绘图；耐久封闭“答案已经确认、重新绘图请求尚未登记”的崩溃空隙，并保证后一确认不能越过前一待重新绘图项。
+- 耐久记录并在仍有效时复用协调 requested/proposed/applied/failed/retry 状态和 proposal，避免重启或重试无必要地再次调用协调提供者并产生不同结果。
+- 扩展协调 proposal 与应用层，使已确认节点仍可安全接受可推导的关系和路线有效性变化，同时继续保护节点身份、当前答案与历史。
+- 完整提案通过领域校验、规范写入和持久化后，才向相关探索 Agent 交付协调上下文；旧答案草案进入可观察历史，只有协调后的当前草案可以确认。
+- 用一个更深的人驾目标探索模块收拢确认、协调与恢复顺序，并让 HTTP 和页面只提交领域操作、呈现允许操作及其不可执行原因。
+- 补齐最高层 Explorer HTTP acceptance：完整预览、近同时确认顺序、确认后崩溃交接与重启、proposal 幂等复用、关系变化、相关探索和草案协调、外部编辑冲突，以及最终抵达约束。现有较低层测试继续用于穷举损坏输入，但不能替代这些验收。
 
 ## Solution
 
@@ -87,7 +112,7 @@ Status: ready-for-agent
 - A genuine conflict produces a review record associated with the existing node. The node retains its answer and history but its current-answer status no longer contributes to a determined route until the review is resolved.
 - The fixed behaviors from superseded ADR-0030, ADR-0032, ADR-0033, and ADR-0034 are not reintroduced. Explorer does not automatically mark every graph descendant for manual review, enforce a universal dependency-order review queue, require explicit session calibration, or require every stale draft to be manually rebuilt when the proposal can derive the correct result.
 - Unrelated active explorations remain unchanged. Related active explorations retain their Expedition id, claim, transcript, and history; coordination updates their effective premise and the currently confirmable proposal without ending or replacing the exploration.
-- Confirmation is serialized per Campaign. Every accepted answer or revision receives a monotonically ordered confirmation record, and its coordination completes or enters recovery before the next queued confirmation is applied.
+- Confirmation is serialized per Campaign. Every accepted answer or revision receives a monotonically ordered confirmation record, and its coordination must complete successfully before the next queued confirmation is applied. Entering recovery persists an honest stable boundary but does not unlock the queue; the same failed item must recover successfully first.
 - Confirmation and rechart are separate durable phases. The answer confirmation is recorded first. Derived coordination changes then apply through a recoverable write journal. Failure after confirmation leaves the answer confirmed, records pending rechart, and never rolls the answer back.
 - While pending rechart, the projection combines the newly confirmed fact with the last successful coordinated map, marks the frontier stale, prevents new claims and later confirmations, and permits already active explorations to continue.
 - Retry is idempotent. Recovery uses the persisted confirmation and coordination proposal when still valid; it does not ask the user to reconfirm and does not duplicate answer-history entries or map changes.
@@ -115,24 +140,24 @@ Status: ready-for-agent
 - One optimistic-concurrency test will edit canonical Markdown after preview and prove that confirmation preserves the external version, invalidates the plan, and performs no partial overwrite.
 - One backward-compatibility test will open an existing single-Answer Campaign and prove it projects as one current answer revision with unchanged node identity and layout.
 - Focused lower-level tests are retained only where the HTTP seam cannot cheaply enumerate corruption cases: canonical parser compatibility, proposal-schema rejection, event replay validation, write-journal phase recovery, and projection invariants.
-- No separate Agent runtime adapter contract test is part of this spec. Tool events, permission requests, Codex Thread binding, and runtime replacement will be specified and tested later.
+- No separate Agent runtime adapter contract test is part of this spec. The current Codex adapter, tool events, permission requests, thread binding, and future runtime replacement remain a separate acceptance surface.
 
 ## Out of Scope
 
-- Implementing or independently testing a real Codex/Agent runtime adapter.
-- Starting, resuming, or migrating real Codex Thread bindings for the map-change proposal provider.
+- Changing or independently testing the current Codex/Agent runtime adapter.
+- Changing, migrating, or independently accepting real Codex Thread bindings for the map-change proposal provider.
 - Normal Agent tool access, tool-event presentation, or approval handling for side effects.
 - Proving that a model makes a high-quality semantic-impact judgment; this spec proves how Explorer validates and applies a supplied structured proposal.
 - Redesigning existing map navigation, node visuals, transcript interaction, proposal controls, or confirmation controls beyond the additional states and history required for revision.
 - Adding a second manual maintenance workflow for graph descendants, session calibration, or stale drafts.
 - Restoring the superseded fixed-review behaviors from ADR-0030 and ADR-0032 through ADR-0034.
-- Changing the purpose of a target exploration after a substantial destination change; that still requires a new exploration.
+- Implementing the destination-change operation itself. When such a change is requested, ADR-0041 requires Explorer to first perform a 目的地变更可达性检查. It keeps the same target exploration only when the original start, current map, confirmed history, and active work can still reach the new destination through normal revision and coordination; otherwise it preserves this exploration and establishes a new one.
 - Executing the real-world work described by decisions; 抵达目的地 still means that the decision path is closed.
 - Publishing this spec or its tickets to a remote issue tracker.
 
 ## Further Notes
 
-- Active decision sources for this spec are ADR-0028, ADR-0029, ADR-0031, ADR-0035, and the existing confirmation/rechart/recovery ADRs. ADR-0001 is superseded by ADR-0031. ADR-0015, ADR-0030, ADR-0032, ADR-0033, and ADR-0034 are superseded by ADR-0035.
-- ADR-0036 through ADR-0038, and the runtime-specific portion of ADR-0037, remain decisions to implement in the follow-up Agent-runtime spec. This spec preserves the application boundary they will later satisfy instead of binding Explorer behavior to Codex protocol details.
+- Active decision sources for this spec are ADR-0028, ADR-0029, ADR-0031, ADR-0035, ADR-0041, and the existing confirmation/rechart/recovery ADRs. ADR-0001 is superseded by ADR-0031. ADR-0015, ADR-0030, ADR-0032, ADR-0033, and ADR-0034 are superseded by ADR-0035. ADR-0041 replaces the former rule that every substantial destination change necessarily starts a new exploration.
+- ADR-0036 through ADR-0038 constrain the existing Agent runtime integration. The current Codex adapter already provides persistent sessions and normal permission-governed tool access, while runtime-neutral domain storage and public projections remain incomplete; this spec preserves the application boundary without taking ownership of that adapter work.
 - ADR-0039 applies here as an interaction constraint: introducing the revision and coordination states must preserve the meanings of existing user operations.
-- The current repository test baseline is not green before this feature: several tests depend on a Personal Brain fixture outside the repository, and the installed dependency tree is missing `react-markdown`. These are pre-existing environment/baseline issues and must be repaired or isolated before the complete suite can serve as a release gate.
+- The repository now includes its Personal Brain fixture and `react-markdown` dependency, so those former baseline blockers no longer apply. A green current suite still does not replace the remaining highest-level HTTP acceptance cases listed above.

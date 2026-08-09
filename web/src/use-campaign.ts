@@ -182,6 +182,16 @@ export function useCampaign(): CampaignResource {
       `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/messages`,
       { message },
     ),
+    confirmDestination: (chartingId, draftId) => postCharting(
+      `charting:${chartingId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/destination/confirm`,
+      { draftId },
+    ),
+    confirmStartingPoint: (chartingId, draftId, evidenceVersion) => postCharting(
+      `charting:${chartingId}`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/starting-point/confirm`,
+      { draftId, evidenceVersion },
+    ),
     formMapProposal: (chartingId) => postCharting(
       `charting:${chartingId}`,
       `${bootstrapRef.current?.apiRoot ?? "/api"}/charting/${encodeURIComponent(chartingId)}/proposal`,

@@ -1712,6 +1712,13 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+.composer-shortcut {
+  display: block;
+  margin-top: 3px;
+  color: #405652;
+  letter-spacing: 0.02em;
+}
+
 .expedition-composer button {
   min-height: 34px;
   padding: 0 12px;
@@ -1726,6 +1733,16 @@ button:focus-visible {
 
 .expedition-composer button span {
   margin-left: 7px;
+}
+
+.expedition-composer .message-composer__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.message-composer__send svg {
+  flex: 0 0 auto;
 }
 
 .expedition-composer__actions {
@@ -2499,6 +2516,15 @@ button:focus-visible {
   list-style: none;
 }
 
+.charting-phases__sync {
+  max-width: 620px;
+  margin: 24px 0 -14px;
+  color: #9b8b6f;
+  font-family: var(--mono);
+  font-size: 8px;
+  line-height: 1.6;
+}
+
 .charting-phases li {
   position: relative;
   display: grid;
@@ -2589,6 +2615,47 @@ button:focus-visible {
 
 .charting-transcript {
   max-height: min(32vh, 350px);
+}
+
+.endpoint-cards {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.endpoint-card {
+  padding: 14px 16px;
+  border: 1px solid rgba(95, 170, 160, 0.17);
+  background: rgba(19, 45, 43, 0.22);
+  color: #aebfba;
+}
+
+.endpoint-card > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  color: #8ea59f;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.endpoint-card > header b {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.endpoint-card.is-confirmed > header b {
+  color: var(--trail);
+}
+
+.endpoint-card .markdown-text {
+  margin-top: 12px;
+}
+
+.endpoint-card .proposal-actions {
+  margin-top: 14px;
 }
 
 .map-proposal-destination {

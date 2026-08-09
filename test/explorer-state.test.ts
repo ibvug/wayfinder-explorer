@@ -89,6 +89,7 @@ function chartingView(): ChartingView {
     campaignId: "campaign-acde00000006",
     threadId: "thread-zero",
     state: "confirmed",
+    phase: "ready_for_proposal",
     messages: [],
     mapCreatedAt: "2026-08-07T00:00:00.000Z",
     rechartQueue: [],

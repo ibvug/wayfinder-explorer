@@ -23,10 +23,11 @@ import { inspectCampaignAs } from "../wayfinder.ts";
 import type {
   MapCreationPlanView,
   MapProposal,
-  MapProposalContent,
+  MapProposalDraftContent,
   MapTicketProposal,
 } from "./model.ts";
 import { parseMapProposalContent } from "./proposal.ts";
+import { validateSafeCommonMark } from "../expedition/proposal.ts";
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1_000;
 
@@ -367,11 +368,8 @@ interface RenderedFile {
 }
 
 function validateProposal(proposal: MapProposal): void {
-  const content: MapProposalContent = {
+  const content: MapProposalDraftContent = {
     title: proposal.title,
-    destination: proposal.destination,
-    startingState: proposal.startingState,
-    evidenceScope: proposal.evidenceScope,
     notes: proposal.notes,
     tickets: proposal.tickets,
     fog: proposal.fog,
@@ -379,6 +377,11 @@ function validateProposal(proposal: MapProposal): void {
     evidenceRefs: proposal.evidenceRefs,
   };
   parseMapProposalContent(JSON.stringify(content), new Set(proposal.evidenceRefs));
+  if (!proposal.destination.trim() || !proposal.startingState.trim() || !proposal.evidenceScope.length) {
+    throw new MapCreationConflictError("首图草案缺少已经确认的目的地、起点或取证范围。");
+  }
+  validateSafeCommonMark(proposal.destination);
+  validateSafeCommonMark(proposal.startingState);
 }
 
 function assertBlankCampaign(campaign: CampaignProjection): void {

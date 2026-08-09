@@ -62,18 +62,57 @@ test("a player confirms a first map without inventing a route and keeps the same
   const chartingId = started.json().charting.id as string;
   const threadId = started.json().charting.threadId as string;
   await waitFor(() => charting.getView(chartingId)?.state === "awaiting_player");
+  assert.equal(charting.getView(chartingId)?.phase, "destination");
 
   await command(explorer, `/api/charting/${chartingId}/messages`, {
     snapshotVersion: 1,
     message: "终点是得到一份可执行的小型 Agent 项目规划；所有关键技术决策明确，尚未执行现实开发。",
   });
   await waitForGuideMessages(charting, chartingId, 2);
+  assert.equal(charting.getView(chartingId)?.phase, "destination");
+  const destinationDraft = charting.getView(chartingId)!.destinationDraft!;
+  const destinationConfirmed = await command(
+    explorer,
+    `/api/charting/${chartingId}/destination/confirm`,
+    { snapshotVersion: 1, draftId: destinationDraft.id },
+  );
+  assert.equal(destinationConfirmed.statusCode, 200);
+  await waitForGuideMessages(charting, chartingId, 3);
+  assert.equal(charting.getView(chartingId)?.phase, "starting_state");
+  assert.equal(
+    charting.getView(chartingId)?.confirmedDestination?.content,
+    destinationDraft.content,
+  );
 
   await command(explorer, `/api/charting/${chartingId}/messages`, {
     snapshotVersion: 1,
     message: "从一个只有 README 的空目录开始。取证只限当前项目目录和 README，不允许修改项目文件。",
   });
-  await waitForGuideMessages(charting, chartingId, 3);
+  await waitForGuideMessages(charting, chartingId, 4);
+  assert.equal(charting.getView(chartingId)?.phase, "starting_state");
+  const startingPointDraft = charting.getView(chartingId)!.startingPointDraft!;
+
+  const prematureProposal = await command(explorer, `/api/charting/${chartingId}/proposal`, {
+    snapshotVersion: 1,
+  });
+  assert.equal(prematureProposal.statusCode, 409);
+  assert.match(prematureProposal.json().error, /建立起点/);
+
+  const startingPointConfirmed = await command(
+    explorer,
+    `/api/charting/${chartingId}/starting-point/confirm`,
+    {
+      snapshotVersion: 1,
+      draftId: startingPointDraft.id,
+      evidenceVersion: startingPointDraft.evidenceVersion,
+    },
+  );
+  assert.equal(startingPointConfirmed.statusCode, 200);
+  assert.equal(charting.getView(chartingId)?.phase, "ready_for_proposal");
+  assert.equal(
+    charting.getView(chartingId)?.confirmedStartingPoint?.summary,
+    startingPointDraft.summary,
+  );
 
   const proposalResponse = await command(explorer, `/api/charting/${chartingId}/proposal`, {
     snapshotVersion: 1,
@@ -514,6 +553,8 @@ interface FakeTurn {
   status: "inProgress" | "completed";
   items: Array<Record<string, unknown>>;
   structured: boolean;
+  dialogue: boolean;
+  dialogueStage?: "destination" | "starting_state" | "ready_for_proposal";
   rechart: boolean;
   confirmedLocationId?: string;
   invalidRechart: boolean;
@@ -550,6 +591,7 @@ class FirstMapAgentTransport implements ChartingTransport {
     }
     if (method === "turn/start") {
       const structured = isRecord(params) && params.outputSchema !== undefined;
+      const dialogue = structured && isChartingProgressSchema(params.outputSchema);
       const rechart = structured && isRechartSchema(params.outputSchema);
       if (rechart) {
         this.#world.rechartTurns += 1;
@@ -570,6 +612,8 @@ class FirstMapAgentTransport implements ChartingTransport {
         status: "inProgress",
         items: [],
         structured,
+        dialogue,
+        dialogueStage: dialogue ? chartingStageFromSchema(params.outputSchema) : undefined,
         rechart,
         confirmedLocationId,
         invalidRechart,
@@ -605,7 +649,6 @@ class FirstMapAgentTransport implements ChartingTransport {
   }
 
   #completeTurn(thread: FakeThread, turn: FakeTurn): void {
-    const normalTurns = thread.turns.filter(({ structured }) => !structured).length;
     const text = turn.rechart
       ? JSON.stringify({
           issueChanges: turn.confirmedLocationId === "02" && turn.rechartOrdinal === 1
@@ -642,12 +685,9 @@ class FirstMapAgentTransport implements ChartingTransport {
             ? "location:99:answer"
             : `location:${turn.confirmedLocationId}:answer`],
         })
-      : turn.structured
+      : !turn.dialogue
       ? JSON.stringify({
           title: "小型 Agent 项目规划地图",
-          destination: "形成一份可执行的小型 Agent 项目规划；关键技术决策全部明确，但不假装现实开发已经完成。",
-          startingState: "项目目录中只有 README，尚未形成 Agent 架构或实施计划。",
-          evidenceScope: ["当前项目目录", "README"],
           notes: ["先闭合规划决策，再进入现实实施。"],
           tickets: [
             {
@@ -667,13 +707,31 @@ class FirstMapAgentTransport implements ChartingTransport {
           ],
           fog: ["端到端验收形式尚未明确"],
           outOfScope: ["在本次探索中实际编写 Agent"],
-          evidenceRefs: ["turn:turn-map-agent-1", "turn:turn-map-agent-2", "turn:turn-map-agent-3"],
+          evidenceRefs: [
+            "turn:turn-map-agent-1",
+            "turn:turn-map-agent-2",
+            "turn:turn-map-agent-3",
+            "turn:turn-map-agent-4",
+          ],
         })
-      : normalTurns === 1
-        ? "先确认目的地：完成这次探索时，什么可观察结果必须已经成立？"
-        : normalTurns === 2
-          ? "现在确认起点与取证范围：从什么现状开始，哪些资料可以作为事实证据？"
-          : "目的地、取证范围和起点已经清楚，可以形成首张地图提案。";
+      : turn.dialogueStage === "destination"
+        ? JSON.stringify({
+            message: "目的地草案已经足够明确，请审阅后使用确认目的地操作。",
+            destinationDraft: {
+              content: "形成一份可执行的小型 Agent 项目规划；关键技术决策全部明确，但不假装现实开发已经完成。",
+            },
+          })
+        : turn.dialogueStage === "starting_state"
+          ? JSON.stringify({
+              message: "我已在约定范围内核对事实，请审阅起点草案后使用确认起点操作。",
+              startingPointDraft: {
+                summary: "项目目录中只有 README，尚未形成 Agent 架构或实施计划。",
+                evidenceScope: ["当前项目目录", "README"],
+                evidencePaths: [],
+                evidenceRefs: [`turn:${turn.id}`],
+              },
+            })
+          : JSON.stringify({ message: "目的地和起点已经由 Explorer 保存，可以继续形成首张地图提案。" });
     const item = {
       type: "agentMessage",
       id: `agent-${turn.id}`,
@@ -1000,6 +1058,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRechartSchema(value: unknown): boolean {
   return isRecord(value) && isRecord(value.properties) && "issueChanges" in value.properties;
+}
+
+function isChartingProgressSchema(value: unknown): boolean {
+  return isRecord(value) &&
+    isRecord(value.properties) &&
+    "message" in value.properties &&
+    !("tickets" in value.properties);
+}
+
+function chartingStageFromSchema(value: unknown): FakeTurn["dialogueStage"] {
+  if (!isRecord(value) || !isRecord(value.properties)) {
+    return undefined;
+  }
+  if ("destinationDraft" in value.properties) {
+    return "destination";
+  }
+  if ("startingPointDraft" in value.properties) {
+    return "starting_state";
+  }
+  return "ready_for_proposal";
 }
 
 function rechartLocationId(params: unknown): string {

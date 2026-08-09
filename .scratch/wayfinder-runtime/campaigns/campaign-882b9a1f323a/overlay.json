@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "campaign-882b9a1f323a",
+  "lastObservedSourceRevision": "sha256:719a87375af0e37f74d7c4f9a9ac709751629ce48d16a005783ae8bb3b244756",
+  "layout": {
+    "version": 1,
+    "start": {
+      "x": -30,
+      "y": 420,
+      "region": "start"
+    },
+    "locations": {
+      "01": {
+        "x": 160,
+        "y": 340,
+        "region": "frontier"
+      },
+      "02": {
+        "x": 160,
+        "y": 500,
+        "region": "frontier"
+      },
+      "03": {
+        "x": 350,
+        "y": 420,
+        "region": "gates"
+      },
+      "04": {
+        "x": 540,
+        "y": 420,
+        "region": "gates"
+      }
+    },
+    "destination": {
+      "x": 920,
+      "y": 420,
+      "region": "destination"
+    },
+    "fogEntrance": {
+      "x": 540,
+      "y": 780,
+      "region": "fog"
+    },
+    "bounds": {
+      "minX": -170,
+      "minY": 200,
+      "maxX": 1060,
+      "maxY": 920
+    }
+  },
+  "playerFocusId": "01",
+  "expeditionBindings": {
+    "expedition-3a115ca0-081a-409e-82e9-47b067108aee": "019fe1b4-369f-7d22-88d5-2879d124c6da"
+  },
+  "createdAt": "2026-08-08T13:11:47.867Z",
+  "updatedAt": "2026-08-08T14:11:32.590Z"
+}

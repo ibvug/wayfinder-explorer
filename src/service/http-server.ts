@@ -356,6 +356,30 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     }),
   );
 
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/charting/:id/destination/confirm",
+    async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service, body) => {
+      if (typeof body.draftId !== "string") {
+        throw new ChartingOperationError(400, "确认目的地请求缺少草案标识。");
+      }
+      return service.confirmDestination(request.params.id, body.draftId);
+    }),
+  );
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/charting/:id/starting-point/confirm",
+    async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service, body) => {
+      if (typeof body.draftId !== "string" || typeof body.evidenceVersion !== "string") {
+        throw new ChartingOperationError(400, "确认起点请求缺少草案或证据版本。");
+      }
+      return service.confirmStartingPoint(
+        request.params.id,
+        body.draftId,
+        body.evidenceVersion,
+      );
+    }),
+  );
+
   app.post<{ Params: { id: string; approvalId: string }; Body: unknown }>(
     "/api/charting/:id/approvals/:approvalId",
     async (request, reply) => runChartingAction(reply, activeCharting, request.body, (service, body) => {

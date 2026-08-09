@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "campaign-66717407cdfe",
+  "lastObservedSourceRevision": "sha256:c55317962cd81c9399e1652e9eef02dae3bd5bf9d1c68e3be819c7a50658319f",
+  "layout": {
+    "version": 1,
+    "start": {
+      "x": -30,
+      "y": 420,
+      "region": "start"
+    },
+    "locations": {
+      "10": {
+        "x": 1870,
+        "y": 340,
+        "region": "gates"
+      },
+      "11": {
+        "x": 1870,
+        "y": 500,
+        "region": "gates"
+      },
+      "12": {
+        "x": 2060,
+        "y": 420,
+        "region": "gates"
+      },
+      "13": {
+        "x": 2250,
+        "y": 420,
+        "region": "gates"
+      },
+      "14": {
+        "x": 2440,
+        "y": 420,
+        "region": "gates"
+      },
+      "01": {
+        "x": 160,
+        "y": 420,
+        "region": "trail"
+      },
+      "02": {
+        "x": 350,
+        "y": 375,
+        "region": "trail"
+      },
+      "03": {
+        "x": 540,
+        "y": 455,
+        "region": "trail"
+      },
+      "04": {
+        "x": 730,
+        "y": 390,
+        "region": "trail"
+      },
+      "05": {
+        "x": 920,
+        "y": 465,
+        "region": "trail"
+      },
+      "06": {
+        "x": 1110,
+        "y": 400,
+        "region": "trail"
+      },
+      "07": {
+        "x": 1300,
+        "y": 420,
+        "region": "trail"
+      },
+      "08": {
+        "x": 1490,
+        "y": 420,
+        "region": "frontier"
+      },
+      "09": {
+        "x": 1680,
+        "y": 420,
+        "region": "gates"
+      }
+    },
+    "destination": {
+      "x": 2820,
+      "y": 420,
+      "region": "destination"
+    },
+    "fogEntrance": {
+      "x": 2250,
+      "y": 780,
+      "region": "fog"
+    },
+    "bounds": {
+      "minX": -170,
+      "minY": 200,
+      "maxX": 2960,
+      "maxY": 920
+    }
+  },
+  "playerFocusId": "01",
+  "expeditionBindings": {},
+  "createdAt": "2026-08-08T13:09:10.161Z",
+  "updatedAt": "2026-08-08T13:10:22.012Z"
+}
