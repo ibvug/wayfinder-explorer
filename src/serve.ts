@@ -10,7 +10,7 @@ const HELP = `Wayfinder Explorer M3
 
 Usage:
   npm run build
-  npm start -- <campaign-root> [--port 44993] [--data-root <directory>] [--no-watch]
+  npm start -- [campaign-root] [--port 44993] [--data-root <directory>] [--no-watch]
 
 The service binds only to 127.0.0.1.
 `;
@@ -21,12 +21,6 @@ async function main(): Promise<void> {
     process.stdout.write(HELP);
     return;
   }
-  if (!parsed.campaignRoot) {
-    process.stderr.write(HELP);
-    process.exitCode = 2;
-    return;
-  }
-
   const server = await startExplorerServer({
     campaignRoot: parsed.campaignRoot,
     dataRoot: parsed.dataRoot,
@@ -35,7 +29,11 @@ async function main(): Promise<void> {
     assetsRoot: path.join(PROJECT_ROOT, "dist", "web"),
   });
 
-  process.stdout.write(`Wayfinder Explorer\n${server.origin}\nCampaign: ${server.store.campaignRoot}\n`);
+  process.stdout.write(
+    `Wayfinder Explorer\n${server.origin}\n${server.store
+      ? `Campaign: ${server.store.campaignRoot}`
+      : "Campaign: none · waiting at project library"}\n`,
+  );
 
   let closing = false;
   const close = async () => {

@@ -9,12 +9,29 @@ export interface CampaignSnapshot {
   overlay: ExplorerOverlay;
 }
 
-export interface ExplorerSnapshot extends CampaignSnapshot {
+interface ExplorerSnapshotBase {
+  sequence: number;
   projects: CampaignProjectIndex;
   expeditions: ExpeditionView[];
-  charting?: ChartingView;
   codex: CodexServiceView;
 }
+
+export interface ActiveExplorerSnapshot extends ExplorerSnapshotBase {
+  mode: "campaign";
+  campaign: CampaignProjection;
+  overlay: ExplorerOverlay;
+  charting?: ChartingView;
+}
+
+export interface ProjectLibrarySnapshot extends ExplorerSnapshotBase {
+  mode: "library";
+  expeditions: [];
+  campaign?: never;
+  overlay?: never;
+  charting?: never;
+}
+
+export type ExplorerSnapshot = ActiveExplorerSnapshot | ProjectLibrarySnapshot;
 
 export interface CampaignStreamEvent {
   sequence: number;

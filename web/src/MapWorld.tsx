@@ -87,7 +87,7 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
   });
 
   return (
-    <section className="map-shell" aria-label="决策旅程地图">
+    <section className="map-shell" aria-label="目标探索地图">
       <div className="map-shell__caption" aria-hidden="true">
         <span>已确认节点</span>
         <i className="legend-mark legend-mark--trail" />
@@ -143,7 +143,7 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
             className={`start-landmark${selection.kind === "start" ? " is-selected" : ""}`}
             style={{ left: start.canvasX, top: start.canvasY }}
             onClick={() => onSelect({ kind: "start" })}
-            aria-label="查看旅程起点"
+            aria-label="查看起点"
             aria-pressed={selection.kind === "start"}
             data-map-node-id="start"
           >
@@ -219,7 +219,7 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
             className={`destination-landmark destination-landmark--${destinationNode?.state ?? "open"}${selection.kind === "destination" ? " is-selected" : ""}`}
             style={{ left: destination.canvasX, top: destination.canvasY }}
             onClick={() => onSelect({ kind: "destination" })}
-            aria-label="查看旅程目的地"
+            aria-label="查看目的地"
             aria-pressed={selection.kind === "destination"}
             data-map-node-id="destination"
           >

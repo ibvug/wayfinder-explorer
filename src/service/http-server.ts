@@ -30,6 +30,11 @@ import {
   CampaignRegistry,
   CampaignRegistryError,
 } from "../project/registry.ts";
+import {
+  ProjectTrashError,
+  SystemProjectTrash,
+  type ProjectTrash,
+} from "../project/trash.ts";
 import { CampaignStore, type CampaignStoreOptions } from "./campaign-store.ts";
 import { ExplorerState } from "./explorer-state.ts";
 import type { ExplorerSnapshot } from "./model.ts";
@@ -39,7 +44,7 @@ const BOOTSTRAP_MARKER = "__WAYFINDER_BOOTSTRAP_JSON__";
 const NONCE_MARKER = "__WAYFINDER_NONCE__";
 
 export interface ExplorerAppOptions {
-  store: CampaignStore;
+  store?: CampaignStore;
   assetsRoot: string;
   apiToken?: string;
   publicOrigin?: string;
@@ -50,6 +55,7 @@ export interface ExplorerAppOptions {
     registry: CampaignRegistry;
     index: CampaignProjectIndex;
     open(record: CampaignProjectRecord): Promise<ProjectContext>;
+    trash?: ProjectTrash;
   };
 }
 
@@ -63,12 +69,13 @@ export interface ExplorerApp {
   app: FastifyInstance;
   apiToken: string;
   setPublicOrigin(origin: string): void;
-  getStore(): CampaignStore;
+  getStore(): CampaignStore | undefined;
   getExpeditions(): ExpeditionService | undefined;
   getCharting(): ChartingService | undefined;
 }
 
-export interface StartExplorerServerOptions extends CampaignStoreOptions {
+export interface StartExplorerServerOptions extends Omit<CampaignStoreOptions, "campaignRoot"> {
+  campaignRoot?: string;
   assetsRoot: string;
   port?: number;
   grillingSkillPath?: string;
@@ -77,9 +84,9 @@ export interface StartExplorerServerOptions extends CampaignStoreOptions {
 
 export interface RunningExplorerServer extends ExplorerApp {
   origin: string;
-  readonly store: CampaignStore;
-  readonly expeditions: ExpeditionService;
-  readonly charting: ChartingService;
+  readonly store: CampaignStore | undefined;
+  readonly expeditions: ExpeditionService | undefined;
+  readonly charting: ChartingService | undefined;
   close(): Promise<void>;
 }
 
@@ -116,7 +123,7 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
   const state = new ExplorerState(
     activeStore,
     activeExpeditions,
-    options.projects?.index ?? fallbackProjectIndex(activeStore),
+    options.projects?.index ?? (activeStore ? fallbackProjectIndex(activeStore) : { projects: [] }),
     activeCharting,
   );
   let projectSwitchChain: Promise<void> = Promise.resolve();
@@ -134,53 +141,55 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     setPublicOrigin(options.publicOrigin);
   }
 
-  async function activateProject(projectId: string): Promise<ExplorerSnapshot> {
+  async function activateProjectNow(projectId: string): Promise<ExplorerSnapshot> {
     if (!options.projects) {
       throw new CampaignRegistryError(503, "当前服务没有启用项目管理。");
     }
-    return serializeProjectMutation(async () => {
-      assertProjectSwitchSafe(activeExpeditions, activeCharting);
-      const record = options.projects!.registry.getRecord(projectId);
-      if (!record) {
-        throw new CampaignRegistryError(404, "项目不在 Wayfinder Explorer 的项目列表中。");
-      }
-      if (activeStore.getSnapshot().campaign.id === projectId) {
-        await options.projects!.registry.activate(projectId);
-        state.setProjects(await options.projects!.registry.getIndex());
-        return state.getSnapshot();
-      }
-
-      const next = await options.projects!.open(record);
-      try {
-        await options.projects!.registry.activate(projectId);
-      } catch (error) {
-        await Promise.allSettled([
-          next.charting?.close() ?? Promise.resolve(),
-          next.expeditions.close(),
-          next.store.close(),
-        ]);
-        throw error;
-      }
-      const previousStore = activeStore;
-      const previousExpeditions = activeExpeditions;
-      const previousCharting = activeCharting;
-      activeStore = next.store;
-      activeExpeditions = next.expeditions;
-      activeCharting = next.charting;
-      connectRechartCoordination(activeCharting, activeExpeditions);
-      state.switchContext(
-        activeStore,
-        activeExpeditions,
-        await options.projects!.registry.getIndex(),
-        activeCharting,
-      );
-      await Promise.allSettled([
-        previousCharting?.close() ?? Promise.resolve(),
-        previousExpeditions?.close() ?? Promise.resolve(),
-        previousStore.close(),
-      ]);
+    assertProjectSwitchSafe(activeExpeditions, activeCharting);
+    const record = options.projects.registry.getRecord(projectId);
+    if (!record) {
+      throw new CampaignRegistryError(404, "项目不在 Wayfinder Explorer 的项目列表中。");
+    }
+    if (activeStore?.getSnapshot().campaign.id === projectId) {
+      await options.projects.registry.activate(projectId);
+      state.setProjects(await options.projects.registry.getIndex());
       return state.getSnapshot();
-    });
+    }
+
+    const next = await options.projects.open(record);
+    try {
+      await options.projects.registry.activate(projectId);
+    } catch (error) {
+      await Promise.allSettled([
+        next.charting?.close() ?? Promise.resolve(),
+        next.expeditions.close(),
+        next.store.close(),
+      ]);
+      throw error;
+    }
+    const previousStore = activeStore;
+    const previousExpeditions = activeExpeditions;
+    const previousCharting = activeCharting;
+    activeStore = next.store;
+    activeExpeditions = next.expeditions;
+    activeCharting = next.charting;
+    connectRechartCoordination(activeCharting, activeExpeditions);
+    state.switchContext(
+      activeStore,
+      activeExpeditions,
+      await options.projects.registry.getIndex(),
+      activeCharting,
+    );
+    await Promise.allSettled([
+      previousCharting?.close() ?? Promise.resolve(),
+      previousExpeditions?.close() ?? Promise.resolve(),
+      previousStore?.close() ?? Promise.resolve(),
+    ]);
+    return state.getSnapshot();
+  }
+
+  async function activateProject(projectId: string): Promise<ExplorerSnapshot> {
+    return serializeProjectMutation(() => activateProjectNow(projectId));
   }
 
   function serializeProjectMutation<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -260,6 +269,9 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
       if (typeof body.locationId !== "string") {
         throw new ExpeditionOperationError(400, "当前选中节点缺少有效的地点编号。");
       }
+      if (!activeStore) {
+        throw new CampaignRegistryError(409, "当前没有打开项目，请先从初始界面选择一段旅程。");
+      }
       if (!activeStore.getSnapshot().campaign.locations.some(({ id }) => id === body.locationId)) {
         throw new ExpeditionOperationError(404, `地图上不存在地点 ${body.locationId}。`);
       }
@@ -273,6 +285,34 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     async (request, reply) => runProjectAction(reply, request.body, async () => ({
       snapshot: await activateProject(request.params.id),
     })),
+  );
+
+  app.post<{ Body: unknown }>(
+    "/api/projects/deactivate",
+    async (request, reply) => runProjectAction(reply, request.body, async () => {
+      if (!options.projects) {
+        throw new CampaignRegistryError(503, "当前服务没有启用项目管理。");
+      }
+      return serializeProjectMutation(async () => {
+        assertProjectSwitchSafe(activeExpeditions, activeCharting);
+        await options.projects!.registry.deactivate();
+        const previousContext = {
+          store: activeStore,
+          expeditions: activeExpeditions,
+          charting: activeCharting,
+        };
+        activeStore = undefined;
+        activeExpeditions = undefined;
+        activeCharting = undefined;
+        state.enterProjectLibrary(await options.projects!.registry.getIndex());
+        await Promise.allSettled([
+          previousContext.charting?.close() ?? Promise.resolve(),
+          previousContext.expeditions?.close() ?? Promise.resolve(),
+          previousContext.store?.close() ?? Promise.resolve(),
+        ]);
+        return { snapshot: state.getSnapshot() };
+      });
+    }),
   );
 
   app.post<{ Body: unknown }>(
@@ -328,6 +368,77 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
       }
       const record = await options.projects.registry.relink(request.params.id, body.root);
       return { snapshot: await activateProject(record.id) };
+    }),
+  );
+
+  app.delete<{ Params: { id: string }; Body: unknown }>(
+    "/api/projects/:id",
+    async (request, reply) => runProjectAction(reply, request.body, async () => {
+      if (!options.projects) {
+        throw new CampaignRegistryError(503, "当前服务没有启用项目管理。");
+      }
+      return serializeProjectMutation(async () => {
+        const projectOptions = options.projects!;
+        const record = projectOptions.registry.getRecord(request.params.id);
+        if (!record) {
+          throw new CampaignRegistryError(404, "项目不在 Wayfinder Explorer 的项目列表中。");
+        }
+        if (!projectOptions.trash) {
+          throw new ProjectTrashError(503, "当前服务没有启用系统废纸篓，不能删除项目目录。");
+        }
+        const removingActiveProject = record.id === projectOptions.registry.activeProjectId;
+        if (removingActiveProject) {
+          assertProjectSwitchSafe(activeExpeditions, activeCharting);
+          const previousContext = {
+            store: activeStore,
+            expeditions: activeExpeditions,
+            charting: activeCharting,
+          };
+          activeStore = undefined;
+          activeExpeditions = undefined;
+          activeCharting = undefined;
+          await Promise.allSettled([
+            previousContext.charting?.close() ?? Promise.resolve(),
+            previousContext.expeditions?.close() ?? Promise.resolve(),
+            previousContext.store?.close() ?? Promise.resolve(),
+          ]);
+          try {
+            await projectOptions.registry.remove(request.params.id, {
+              moveRootToTrash: (root) => projectOptions.trash!.moveToTrash(root),
+            });
+          } catch (error) {
+            try {
+              const restored = await projectOptions.open(record);
+              activeStore = restored.store;
+              activeExpeditions = restored.expeditions;
+              activeCharting = restored.charting;
+              connectRechartCoordination(activeCharting, activeExpeditions);
+              state.switchContext(
+                restored.store,
+                restored.expeditions,
+                await projectOptions.registry.getIndex(),
+                restored.charting,
+              );
+            } catch (restoreError) {
+              await projectOptions.registry.deactivate().catch(() => undefined);
+              state.enterProjectLibrary(await projectOptions.registry.getIndex());
+              throw new CampaignRegistryError(
+                500,
+                "项目删除失败，当前会话也未能自动恢复；项目仍保留在项目库中。",
+                new AggregateError([error, restoreError]),
+              );
+            }
+            throw error;
+          }
+          state.enterProjectLibrary(await projectOptions.registry.getIndex());
+        } else {
+          await projectOptions.registry.remove(request.params.id, {
+            moveRootToTrash: (root) => projectOptions.trash!.moveToTrash(root),
+          });
+          state.setProjects(await projectOptions.registry.getIndex());
+        }
+        return { snapshot: state.getSnapshot() };
+      });
     }),
   );
 
@@ -594,7 +705,7 @@ export async function createExplorerApp(options: ExplorerAppOptions): Promise<Ex
     state.close();
     await activeCharting?.close();
     await activeExpeditions?.close();
-    await activeStore.close();
+    await activeStore?.close();
   });
 
   return {
@@ -630,28 +741,28 @@ export async function startExplorerServer(
     initialCampaignRoot: options.campaignRoot,
   });
   const activeRecord = registry.getActiveRecord();
-  if (!activeRecord) {
-    throw new Error("Wayfinder Explorer does not have an active project.");
-  }
-  const initialContext = await openProjectContext(activeRecord, options);
+  const initialContext = activeRecord
+    ? await openProjectContext(activeRecord, options)
+    : undefined;
   let explorer: ExplorerApp;
   try {
     explorer = await createExplorerApp({
-      store: initialContext.store,
+      store: initialContext?.store,
       assetsRoot: options.assetsRoot,
-      expeditions: initialContext.expeditions,
-      charting: initialContext.charting,
+      expeditions: initialContext?.expeditions,
+      charting: initialContext?.charting,
       projects: {
         registry,
         index: await registry.getIndex(),
         open: (record) => openProjectContext(record, options),
+        trash: new SystemProjectTrash(),
       },
       directoryPicker: new SystemDirectoryPicker(),
     });
   } catch (error) {
-    await initialContext.charting?.close();
-    await initialContext.expeditions.close();
-    await initialContext.store.close();
+    await initialContext?.charting.close();
+    await initialContext?.expeditions.close();
+    await initialContext?.store.close();
     throw error;
   }
 
@@ -669,18 +780,10 @@ export async function startExplorerServer(
         return explorer.getStore();
       },
       get expeditions() {
-        const expeditions = explorer.getExpeditions();
-        if (!expeditions) {
-          throw new Error("The active project does not have an Expedition service.");
-        }
-        return expeditions;
+        return explorer.getExpeditions();
       },
       get charting() {
-        const charting = explorer.getCharting();
-        if (!charting) {
-          throw new Error("The active project does not have a Charting service.");
-        }
-        return charting;
+        return explorer.getCharting();
       },
       close: () => explorer.app.close(),
     };
@@ -869,6 +972,7 @@ async function runProjectAction(
     if (
       error instanceof CampaignRegistryError ||
       error instanceof DirectoryPickerError ||
+      error instanceof ProjectTrashError ||
       error instanceof ExpeditionOperationError ||
       error instanceof ChartingOperationError
     ) {

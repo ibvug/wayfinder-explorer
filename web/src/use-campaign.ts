@@ -54,7 +54,7 @@ export function useCampaign(): CampaignResource {
 
   const mergeExpedition = useCallback((expedition: ExpeditionView) => {
     setResource((current) => {
-      if (!current.snapshot) {
+      if (!current.snapshot || current.snapshot.mode !== "campaign") {
         return current;
       }
       const expeditions = current.snapshot.expeditions.some(({ id }) => id === expedition.id)
@@ -68,7 +68,7 @@ export function useCampaign(): CampaignResource {
   }, []);
 
   const mergeCharting = useCallback((charting: ChartingView) => {
-    setResource((current) => current.snapshot
+    setResource((current) => current.snapshot?.mode === "campaign"
       ? { ...current, snapshot: { ...current.snapshot, charting } }
       : current);
   }, []);
@@ -127,18 +127,19 @@ export function useCampaign(): CampaignResource {
     target: string,
     endpoint: string,
     body: Record<string, unknown>,
+    method: "POST" | "DELETE" = "POST",
   ) => {
     const bootstrap = bootstrapRef.current ?? readBootstrap();
     setActionState(target);
     try {
       const response = await apiFetch(endpoint, bootstrap, {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotVersion: sequence.current, ...body }),
       });
       const payload = await response.json() as { snapshot?: CampaignSnapshot; error?: string };
       if (!response.ok || !payload.snapshot) {
-        throw new Error(payload.error ?? `项目请求失败（${response.status}）`);
+        throw new Error(payload.error ?? `目标探索请求失败（${response.status}）`);
       }
       applySnapshot(payload.snapshot);
       setActionState();
@@ -283,6 +284,11 @@ export function useCampaign(): CampaignResource {
       `${bootstrapRef.current?.apiRoot ?? "/api"}/projects/${encodeURIComponent(projectId)}/activate`,
       {},
     ),
+    deactivateProject: () => postProject(
+      "project:deactivate",
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/projects/deactivate`,
+      {},
+    ),
     createProject: (name, parentRoot) => postProject(
       "project:create",
       `${bootstrapRef.current?.apiRoot ?? "/api"}/projects`,
@@ -297,6 +303,12 @@ export function useCampaign(): CampaignResource {
       `project:${projectId}`,
       `${bootstrapRef.current?.apiRoot ?? "/api"}/projects/${encodeURIComponent(projectId)}/relink`,
       { root },
+    ),
+    removeProject: (projectId) => postProject(
+      `project:${projectId}:remove`,
+      `${bootstrapRef.current?.apiRoot ?? "/api"}/projects/${encodeURIComponent(projectId)}`,
+      {},
+      "DELETE",
     ),
     selectDirectory,
     interrupt: (expeditionId) => postExpedition(

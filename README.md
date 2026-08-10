@@ -13,6 +13,7 @@ cd wayfinder-explorer
 npm install
 npm test
 npm run build
+npm start
 npm start -- test/fixtures/personal-brain-v1
 
 # Source inspection without opening the map
@@ -20,7 +21,9 @@ npm run inspect -- test/fixtures/personal-brain-v1
 npm run inspect -- test/fixtures/personal-brain-v1 --json
 ```
 
-The service prints the local origin to open in a browser. The inspect command
+Starting without a Campaign root opens the no-project library; no file watcher or
+Agent process starts until the user creates or selects a project. The service
+prints the local origin to open in a browser. The inspect command
 exits with status 1 when blocking source diagnostics exist in either output
 mode. JSON output includes exact field and section source ranges so Explorer can
 patch only managed Markdown regions.
@@ -38,7 +41,9 @@ files directly.
 
 ## Project library
 
-The project title opens a persistent Campaign library. Existing Wayfinder
+The project title opens a persistent Campaign library. The active project can be
+closed back to the no-project start screen without deleting it, and that choice
+survives restart. Existing Wayfinder
 directories can be selected with the native macOS or Windows folder chooser, added by
 absolute path, switched, or relinked after they move. Creating an empty project
 requires both a name and a user-selected parent directory; Explorer creates the

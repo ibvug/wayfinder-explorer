@@ -10,21 +10,21 @@ type ExplorerStateListener = (snapshot: ExplorerSnapshot) => void;
 
 /** Combines source-map and Codex changes into one monotonic browser snapshot stream. */
 export class ExplorerState {
-  #store: CampaignStore;
+  #store?: CampaignStore;
   #expeditions?: ExpeditionService;
   #charting?: ChartingService;
   #projects: CampaignProjectIndex;
   #sequence = 1;
   #listeners = new Set<ExplorerStateListener>();
-  #unsubscribeCampaign: () => void;
+  #unsubscribeCampaign?: () => void;
   #unsubscribeExpeditions?: () => void;
   #unsubscribeCharting?: () => void;
 
   constructor(
-    store: CampaignStore,
+    store: CampaignStore | undefined,
     expeditions?: ExpeditionService,
     projects: CampaignProjectIndex = {
-      activeProjectId: store.getSnapshot().campaign.id,
+      activeProjectId: store?.getSnapshot().campaign.id,
       projects: [],
     },
     charting?: ChartingService,
@@ -33,12 +33,24 @@ export class ExplorerState {
     this.#expeditions = expeditions;
     this.#projects = projects;
     this.#charting = charting;
-    this.#unsubscribeCampaign = store.subscribe(() => this.#publish());
+    this.#unsubscribeCampaign = store?.subscribe(() => this.#publish());
     this.#unsubscribeExpeditions = expeditions?.subscribe(() => this.#publish());
     this.#unsubscribeCharting = charting?.subscribe(() => this.#publish());
   }
 
   getSnapshot(): ExplorerSnapshot {
+    if (!this.#store) {
+      return {
+        mode: "library",
+        sequence: this.#sequence,
+        projects: structuredClone(this.#projects),
+        expeditions: [],
+        codex: {
+          state: "unavailable",
+          error: "打开或创建一个项目后，Codex 服务才会启动。",
+        },
+      };
+    }
     const campaignSnapshot = this.#store.getSnapshot();
     const charting = this.#charting?.getViews().at(-1);
     const expeditions = this.#expeditions?.getViews() ?? [];
@@ -49,6 +61,7 @@ export class ExplorerState {
     );
     const emptyProject = campaign.diagnostics.some(({ code }) => code === "map_missing");
     return {
+      mode: "campaign",
       sequence: this.#sequence,
       projects: structuredClone(this.#projects),
       campaign,
@@ -73,7 +86,7 @@ export class ExplorerState {
     projects: CampaignProjectIndex,
     charting?: ChartingService,
   ): void {
-    this.#unsubscribeCampaign();
+    this.#unsubscribeCampaign?.();
     this.#unsubscribeExpeditions?.();
     this.#unsubscribeCharting?.();
     this.#store = store;
@@ -86,13 +99,27 @@ export class ExplorerState {
     this.#publish();
   }
 
+  enterProjectLibrary(projects: CampaignProjectIndex): void {
+    this.#unsubscribeCampaign?.();
+    this.#unsubscribeExpeditions?.();
+    this.#unsubscribeCharting?.();
+    this.#store = undefined;
+    this.#expeditions = undefined;
+    this.#charting = undefined;
+    this.#projects = structuredClone(projects);
+    this.#unsubscribeCampaign = undefined;
+    this.#unsubscribeExpeditions = undefined;
+    this.#unsubscribeCharting = undefined;
+    this.#publish();
+  }
+
   setProjects(projects: CampaignProjectIndex): void {
     this.#projects = structuredClone(projects);
     this.#publish();
   }
 
   close(): void {
-    this.#unsubscribeCampaign();
+    this.#unsubscribeCampaign?.();
     this.#unsubscribeExpeditions?.();
     this.#unsubscribeCharting?.();
     this.#listeners.clear();

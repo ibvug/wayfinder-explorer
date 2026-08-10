@@ -38,30 +38,49 @@ import {
 import { MessageComposer } from "./MessageComposer.ts";
 import type { ConnectionState, ExpeditionActions, Selection } from "./app-types.ts";
 import { useCampaign } from "./use-campaign.ts";
+import { useModalDialog } from "./use-modal-dialog.ts";
 
 export function App() {
   const { snapshot, connection, error, actions } = useCampaign();
   const [selection, setSelection] = useState<Selection>();
   const [logOpen, setLogOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projectDrawerMode, setProjectDrawerMode] = useState<"create" | "add">();
+  const [mobilePanel, setMobilePanel] = useState<"map" | "detail">("map");
   const lastCampaignId = useRef<string | undefined>(undefined);
   const lastLocationCount = useRef<number | undefined>(undefined);
   const closeLog = useCallback(() => setLogOpen(false), []);
+  const closeProjects = useCallback(() => {
+    setProjectsOpen(false);
+    setProjectDrawerMode(undefined);
+  }, []);
+  const openProjects = useCallback((mode?: "create" | "add") => {
+    setProjectDrawerMode(mode);
+    setProjectsOpen(true);
+  }, []);
   const select = useCallback((next: Selection) => {
     setSelection(next);
+    setMobilePanel("detail");
     if (next.kind === "location") {
       void actions.setPlayerFocus(next.id).catch(() => undefined);
     }
   }, [actions]);
 
   useEffect(() => {
-    if (!snapshot) {
+    if (!snapshot || snapshot.mode !== "campaign") {
+      lastCampaignId.current = undefined;
+      lastLocationCount.current = undefined;
+      setSelection(undefined);
+      setMobilePanel("map");
       return;
     }
     const campaignChanged = lastCampaignId.current !== snapshot.campaign.id;
     const mapWasJustCreated = lastLocationCount.current === 0 && snapshot.campaign.locations.length > 0;
     lastCampaignId.current = snapshot.campaign.id;
     lastLocationCount.current = snapshot.campaign.locations.length;
+    if (campaignChanged || mapWasJustCreated) {
+      setMobilePanel("map");
+    }
     setSelection((current) => {
       if (campaignChanged || mapWasJustCreated) {
         return defaultSelection(snapshot.overlay.playerFocusId, snapshot.campaign);
@@ -76,7 +95,37 @@ export function App() {
     });
   }, [snapshot]);
 
-  if (!snapshot || !selection) {
+  if (!snapshot) {
+    return <LoadingWorld error={error} />;
+  }
+
+  if (snapshot.mode === "library") {
+    return (
+      <main className="explorer-app explorer-app--library">
+        <ProjectLaunchpad
+          index={snapshot.projects}
+          actions={actions}
+          connection={connection}
+          onContinue={(project) => {
+            actions.clearError();
+            void actions.activateProject(project.id).catch(() => undefined);
+          }}
+          onCreate={() => openProjects("create")}
+          onOpenLibrary={() => openProjects()}
+        />
+        {projectsOpen ? (
+          <ProjectDrawer
+            index={snapshot.projects}
+            actions={actions}
+            initialMode={projectDrawerMode}
+            onClose={closeProjects}
+          />
+        ) : null}
+      </main>
+    );
+  }
+
+  if (!selection) {
     return <LoadingWorld error={error} />;
   }
 
@@ -88,19 +137,19 @@ export function App() {
   const pendingRechart = snapshot.charting?.pendingRechart ?? snapshot.charting?.rechartQueue[0];
   const destinationSummary = emptyProject
     ? snapshot.charting?.confirmedDestination?.content ??
-      (snapshot.charting?.destinationDraft ? "目的地草案待确认" : "空项目 · 等待建立目的地")
+      (snapshot.charting?.destinationDraft ? "目的地草案待确认" : "等待建立目的地")
     : campaign.destination;
   const progress = campaign.summary.total
     ? Math.round((campaign.summary.resolved / campaign.summary.total) * 100)
     : 0;
 
   return (
-    <main className="explorer-app">
+    <main className="explorer-app explorer-app--campaign">
       <header className="topbar">
         <button
           type="button"
           className="brand-block project-trigger"
-          onClick={() => setProjectsOpen(true)}
+          onClick={() => openProjects()}
           aria-haspopup="dialog"
           aria-expanded={projectsOpen}
         >
@@ -108,7 +157,7 @@ export function App() {
             <i />
           </span>
           <div>
-            <p className="ui-eyebrow">WAYFINDER EXPLORER · 项目</p>
+            <p className="ui-eyebrow">WAYFINDER EXPLORER · 目标探索</p>
             <h1>{activeProject?.name ?? campaign.title}<i aria-hidden="true">⌄</i></h1>
           </div>
         </button>
@@ -116,7 +165,7 @@ export function App() {
         <button
           type="button"
           className="destination-summary"
-          onClick={() => setSelection({ kind: "destination" })}
+          onClick={() => select({ kind: "destination" })}
           aria-label="查看完整目的地"
         >
           <span>目的地</span>
@@ -124,7 +173,7 @@ export function App() {
         </button>
 
         <div className="topbar__actions">
-          <div className="progress-readout" aria-label={`旅程进度 ${campaign.summary.resolved} / ${campaign.summary.total}`}>
+          <div className="progress-readout" aria-label={`目标探索进度 ${campaign.summary.resolved} / ${campaign.summary.total}`}>
             <span
               className="progress-readout__ring"
               style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}
@@ -137,52 +186,54 @@ export function App() {
           </div>
           <button type="button" className="log-button" onClick={() => setLogOpen(true)}>
             <span className="log-button__glyph" aria-hidden="true">≡</span>
-            旅程日志
+            探索总览
           </button>
         </div>
       </header>
 
-      {campaign.summary.blockingDiagnostics > 0 && !emptyProject ? (
-        <div className="diagnostic-banner" role="status">
-          源地图有 {campaign.summary.blockingDiagnostics} 个阻塞诊断；地图仍可查看，但语义操作已冻结。
-        </div>
-      ) : null}
+      <div className="campaign-status-stack">
+        {campaign.summary.blockingDiagnostics > 0 && !emptyProject ? (
+          <div className="diagnostic-banner" role="status">
+            源地图有 {campaign.summary.blockingDiagnostics} 个阻塞诊断；地图仍可查看，但语义操作已冻结。
+          </div>
+        ) : null}
 
-      {pendingRechart && snapshot.charting ? (
-        <div className="rechart-status" role="status">
-          <div className="rechart-banner">
-            <span>
-              {pendingRechart.triggerKind === "exploration_ended"
-                ? `议题 ${pendingRechart.confirmedLocationId} 已由认领者结束；Map Agent 正在保留未完成历史并协调其余地图。`
-                : `答案 ${pendingRechart.confirmedLocationId} 已确认；Map Agent 正在按顺序更新其余地图。`}
-              在重绘成功前不能从旧前沿开始新探索；后续确认会按顺序排队。
-              {snapshot.charting.rechartQueue.length
-                ? `另有 ${snapshot.charting.rechartQueue.length} 个已确认答案正在排队。`
-                : ""}
-            </span>
-            {snapshot.charting.state === "rechart_failed" ? (
-              <button
-                type="button"
-                onClick={() => void actions.retryRechart(snapshot.charting!.id).catch(() => undefined)}
-                disabled={actions.busyTarget === `charting:${snapshot.charting.id}`}
-              >
-                {actions.busyTarget === `charting:${snapshot.charting.id}` ? "正在重试…" : "重试重绘"}
-              </button>
+        {pendingRechart && snapshot.charting ? (
+          <div className="rechart-status" role="status">
+            <div className="rechart-banner">
+              <span>
+                {pendingRechart.triggerKind === "exploration_ended"
+                  ? `议题 ${pendingRechart.confirmedLocationId} 已由认领者结束；Map Agent 正在保留未完成历史并协调其余地图。`
+                  : `答案 ${pendingRechart.confirmedLocationId} 已确认；Map Agent 正在按顺序更新其余地图。`}
+                在重绘成功前不能从旧前沿开始新探索；后续确认会按顺序排队。
+                {snapshot.charting.rechartQueue.length
+                  ? `另有 ${snapshot.charting.rechartQueue.length} 个已确认答案正在排队。`
+                  : ""}
+              </span>
+              {snapshot.charting.state === "rechart_failed" ? (
+                <button
+                  type="button"
+                  onClick={() => void actions.retryRechart(snapshot.charting!.id).catch(() => undefined)}
+                  disabled={actions.busyTarget === `charting:${snapshot.charting.id}`}
+                >
+                  {actions.busyTarget === `charting:${snapshot.charting.id}` ? "正在重试…" : "重试重绘"}
+                </button>
+              ) : null}
+            </div>
+            {snapshot.charting.approvalRequest ? (
+              <ToolApprovalCard
+                request={snapshot.charting.approvalRequest}
+                busy={actions.busyTarget === `charting:${snapshot.charting.id}`}
+                onDecision={(decision) => void actions.resolveChartingApproval(
+                  snapshot.charting!.id,
+                  snapshot.charting!.approvalRequest!.id,
+                  decision,
+                ).catch(() => undefined)}
+              />
             ) : null}
           </div>
-          {snapshot.charting.approvalRequest ? (
-            <ToolApprovalCard
-              request={snapshot.charting.approvalRequest}
-              busy={actions.busyTarget === `charting:${snapshot.charting.id}`}
-              onDecision={(decision) => void actions.resolveChartingApproval(
-                snapshot.charting!.id,
-                snapshot.charting!.approvalRequest!.id,
-                decision,
-              ).catch(() => undefined)}
-            />
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       {emptyProject && activeProject ? (
         <EmptyProjectStage
@@ -193,7 +244,32 @@ export function App() {
           actions={actions}
         />
       ) : (
-        <div className="workspace">
+        <div className={`workspace workspace--${mobilePanel}`}>
+          <nav className="workspace-switcher" aria-label="工作区视图">
+            <button
+              type="button"
+              className={mobilePanel === "map" ? "is-active" : ""}
+              aria-pressed={mobilePanel === "map"}
+              onClick={() => setMobilePanel("map")}
+            >
+              地图
+            </button>
+            <button
+              type="button"
+              className={mobilePanel === "detail" ? "is-active" : ""}
+              aria-pressed={mobilePanel === "detail"}
+              onClick={() => setMobilePanel("detail")}
+            >
+              当前详情
+            </button>
+            <button
+              type="button"
+              className="workspace-switcher__destination"
+              onClick={() => select({ kind: "destination" })}
+            >
+              目的地
+            </button>
+          </nav>
           <MapWorld
             campaign={campaign}
             overlay={overlay}
@@ -222,36 +298,172 @@ export function App() {
         <ProjectDrawer
           index={snapshot.projects}
           actions={actions}
-          onClose={() => setProjectsOpen(false)}
+          initialMode={projectDrawerMode}
+          onClose={closeProjects}
         />
       ) : null}
     </main>
   );
 }
 
+function ProjectLaunchpad({
+  index,
+  actions,
+  connection,
+  onContinue,
+  onCreate,
+  onOpenLibrary,
+}: {
+  index: CampaignProjectIndex;
+  actions: ExpeditionActions;
+  connection: ConnectionState;
+  onContinue(project: CampaignProjectView): void;
+  onCreate(): void;
+  onOpenLibrary(): void;
+}) {
+  const recentProject = index.projects.find(({ status }) => status !== "missing");
+  const continuing = recentProject && actions.busyTarget === `project:${recentProject.id}`;
+  const recentResolved = recentProject?.resolved ?? 0;
+  const recentProgress = recentProject?.total
+    ? Math.min(100, Math.round((recentResolved / recentProject.total) * 100))
+    : 0;
+  return (
+    <section className="project-launchpad" aria-label="Wayfinder 目标探索入口">
+      <header className="project-launchpad__header">
+        <div className="project-launchpad__brand">
+          <span className="brand-mark" aria-hidden="true"><i /></span>
+          <p className="ui-eyebrow">WAYFINDER</p>
+        </div>
+        {connection !== "live" ? (
+          <div className={`project-launchpad__status project-launchpad__status--${connection}`}>
+            <i aria-hidden="true" />正在连接
+          </div>
+        ) : null}
+      </header>
+
+      <div className="project-launchpad__content">
+        <div className="project-launchpad__mission">
+          <h1>准备出发</h1>
+          <p>
+            {recentProject
+              ? "继续最近的目标探索，或选择另一段旅程。"
+              : "选择一个目标探索，开始前进。"}
+          </p>
+
+          <button
+            type="button"
+            className={`project-launchpad__primary${recentProject ? "" : " project-launchpad__primary--single"}`}
+            onClick={() => recentProject ? onContinue(recentProject) : onOpenLibrary()}
+            disabled={Boolean(continuing)}
+            aria-label={recentProject
+              ? `继续最近的目标探索 ${recentProject.name}，${projectStatusLabel(recentProject)}${recentProject.total !== undefined ? `，${recentResolved}/${recentProject.total}` : ""}`
+              : "选择目标探索"}
+          >
+            {recentProject ? (
+              <>
+                <span className="project-launchpad__primary-sigil" aria-hidden="true"><i /></span>
+                <span className="project-launchpad__primary-body">
+                  <span className="project-launchpad__primary-kicker">
+                    <small>最近探索</small>
+                    <em>{projectStatusLabel(recentProject)}</em>
+                  </span>
+                  <strong>{recentProject.name}</strong>
+                  <span className="project-launchpad__primary-progress">
+                    <span aria-hidden="true"><i style={{ width: `${recentProgress}%` }} /></span>
+                    <b>
+                      {recentProject.total !== undefined
+                        ? `${recentResolved} / ${recentProject.total}`
+                        : "可继续"}
+                    </b>
+                  </span>
+                </span>
+                <span className="project-launchpad__primary-continue">
+                  继续<i aria-hidden="true">→</i>
+                </span>
+              </>
+            ) : (
+              <>
+                <strong>选择目标探索</strong>
+                <i aria-hidden="true">→</i>
+              </>
+            )}
+          </button>
+
+          <nav className="project-launchpad__secondary" aria-label="目标探索操作">
+            {recentProject ? (
+              <button type="button" onClick={onOpenLibrary}>全部目标探索</button>
+            ) : null}
+            <button type="button" onClick={onCreate}><span aria-hidden="true">＋</span>新建目标探索</button>
+          </nav>
+
+          {actions.error ? (
+            <button type="button" className="project-launchpad__error" onClick={actions.clearError}>
+              {actions.error}<span>关闭</span>
+            </button>
+          ) : null}
+        </div>
+
+        <div className="project-launchpad__beacon" aria-hidden="true">
+          <span className="project-launchpad__orbit project-launchpad__orbit--outer"><i /></span>
+          <b><i /></b>
+        </div>
+      </div>
+
+    </section>
+  );
+}
+
 function ProjectDrawer({
   index,
   actions,
+  initialMode,
   onClose,
 }: {
   index: CampaignProjectIndex;
   actions: ExpeditionActions;
+  initialMode?: "create" | "add";
   explorationBlocked?: string;
   onClose(): void;
 }) {
-  const [mode, setMode] = useState<"create" | "add" | "relink">();
+  const [mode, setMode] = useState<"create" | "add" | "relink" | undefined>(initialMode);
   const [targetProject, setTargetProject] = useState<CampaignProjectView>();
+  const [releaseProject, setReleaseProject] = useState<CampaignProjectView>();
+  const [releasedProject, setReleasedProject] = useState<CampaignProjectView>();
   const [name, setName] = useState("");
   const [root, setRoot] = useState("");
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const rootInput = useRef<HTMLInputElement>(null);
+  const dialog = useModalDialog<HTMLElement>({ onClose, initialFocus: closeButton });
   const busy = Boolean(
     actions.busyTarget?.startsWith("project:") ||
     actions.busyTarget?.startsWith("directory:"),
   );
   const choosingDirectory = actions.busyTarget?.startsWith("directory:");
 
+  useEffect(() => {
+    if (!releasedProject) {
+      return;
+    }
+    const timer = setTimeout(() => setReleasedProject(undefined), 4_200);
+    return () => clearTimeout(timer);
+  }, [releasedProject]);
+
+  useEffect(() => {
+    if (mode === "create") {
+      nameInput.current?.focus();
+    } else if (mode === "add" || mode === "relink") {
+      rootInput.current?.focus();
+    } else {
+      closeButton.current?.focus();
+    }
+  }, [mode]);
+
   const resetForm = () => {
     setMode(undefined);
     setTargetProject(undefined);
+    setReleaseProject(undefined);
+    setReleasedProject(undefined);
     setName("");
     setRoot("");
   };
@@ -272,6 +484,8 @@ function ProjectDrawer({
   const beginAdd = () => {
     setMode("add");
     setTargetProject(undefined);
+    setReleaseProject(undefined);
+    setReleasedProject(undefined);
     setName("");
     setRoot("");
     void (async () => {
@@ -304,6 +518,27 @@ function ProjectDrawer({
     void actions.activateProject(project.id).then(onClose).catch(() => undefined);
   };
 
+  const beginRelease = (project: CampaignProjectView) => {
+    actions.clearError();
+    setMode(undefined);
+    setTargetProject(undefined);
+    setReleaseProject(project);
+    setReleasedProject(undefined);
+    setName("");
+    setRoot("");
+  };
+
+  const release = async (project: CampaignProjectView) => {
+    const wasActive = project.id === index.activeProjectId;
+    await actions.removeProject(project.id);
+    if (wasActive) {
+      onClose();
+      return;
+    }
+    setReleaseProject(undefined);
+    setReleasedProject(project);
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const normalizedName = name.trim();
@@ -323,17 +558,19 @@ function ProjectDrawer({
         ? actions.addProject(normalizedRoot)
         : targetProject
           ? actions.relinkProject(targetProject.id, normalizedRoot)
-          : Promise.reject(new Error("没有要重新关联的项目。"));
+          : Promise.reject(new Error("没有需要重新关联的目标探索。"));
     void operation.then(onClose).catch(() => undefined);
   };
 
   const drawerTitle = mode === "create"
-    ? "新建项目"
+    ? "新建目标探索"
     : mode === "add"
-      ? "选择已有项目"
+      ? "打开本地目标探索"
       : mode === "relink"
-        ? "重新关联项目"
-        : "选择一段旅程";
+        ? "重新关联目标探索"
+        : index.activeProjectId
+          ? "切换目标探索"
+          : "选择目标探索";
 
   return (
     <div className="project-drawer-backdrop" role="presentation" onMouseDown={(event) => {
@@ -341,45 +578,98 @@ function ProjectDrawer({
         onClose();
       }
     }}>
-      <section className="project-drawer" role="dialog" aria-modal="true" aria-label={drawerTitle}>
+      <section
+        ref={dialog}
+        className={`project-drawer${mode ? " project-drawer--form" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={drawerTitle}
+        tabIndex={-1}
+      >
         <header>
           <div>
-            <p className="ui-eyebrow">CAMPAIGN LIBRARY</p>
+            <p className="ui-eyebrow">WAYFINDER</p>
             <h2>{drawerTitle}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭项目面板">×</button>
+          <button ref={closeButton} type="button" onClick={onClose} aria-label="关闭目标探索">×</button>
         </header>
 
-        <div className="project-list">
-          {index.projects.map((project) => (
-            <button
-              type="button"
-              className={project.id === index.activeProjectId ? "is-active" : ""}
-              key={project.id}
-              onClick={() => selectProject(project)}
-              disabled={busy}
-            >
-              <span className={`project-list__sigil project-list__sigil--${project.status}`} aria-hidden="true"><i /></span>
-              <span className="project-list__copy">
-                <strong>{project.name}</strong>
-                <small>{project.root}</small>
-              </span>
-              <span className="project-list__meta">
-                <b>{projectStatusLabel(project)}</b>
-                {project.total !== undefined ? <small>{project.resolved ?? 0}/{project.total}</small> : null}
-              </span>
-            </button>
-          ))}
-        </div>
+        {!mode ? <div className="project-list">
+          {index.projects.map((project) => {
+            const active = project.id === index.activeProjectId;
+            const armed = releaseProject?.id === project.id;
+            return (
+              <div
+                className={`project-list__item${active ? " is-active" : ""}${armed ? " is-armed" : ""}`}
+                key={project.id}
+              >
+                {armed ? (
+                  <ProjectReleaseConsole
+                    project={project}
+                    busy={actions.busyTarget === `project:${project.id}:remove`}
+                    returnToLibrary={active}
+                    onCancel={() => setReleaseProject(undefined)}
+                    onConfirm={() => release(project)}
+                  />
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="project-list__open"
+                      onClick={() => selectProject(project)}
+                      disabled={busy}
+                    >
+                      <span className={`project-list__sigil project-list__sigil--${project.status}`} aria-hidden="true"><i /></span>
+                      <span className="project-list__copy">
+                        <strong>{project.name}</strong>
+                        <small>{project.root}</small>
+                      </span>
+                      <span className="project-list__meta">
+                        <b>{projectStatusLabel(project)}</b>
+                        {project.total !== undefined ? <small>{project.resolved ?? 0}/{project.total}</small> : null}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="project-list__release-trigger"
+                      onClick={() => beginRelease(project)}
+                      disabled={busy}
+                      aria-label={active
+                        ? `删除当前目标探索「${project.name}」并返回目标探索入口`
+                        : `删除目标探索「${project.name}」并移到废纸篓`}
+                      title={active
+                        ? "删除并返回目标探索入口"
+                        : "删除并移到废纸篓"}
+                    >
+                      <span aria-hidden="true"><i /><b /></span>
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div> : null}
 
-        {actions.error ? <p className="project-drawer__error">{actions.error}</p> : null}
+        {!mode && releasedProject ? (
+          <div className="project-release-toast" role="status">
+            <span aria-hidden="true"><i /></span>
+            <p>
+              <strong>目标探索已移入废纸篓</strong>
+              「{releasedProject.name}」的目录已移入系统废纸篓。
+            </p>
+          </div>
+        ) : null}
+
+        {!mode && actions.error ? <p className="project-drawer__error">{actions.error}</p> : null}
 
         {mode ? (
           <form className="project-create-form" onSubmit={submit}>
+            {actions.error ? <p className="project-drawer__error">{actions.error}</p> : null}
             {mode === "create" ? (
               <div className="project-create-form__field">
-                <label htmlFor="project-name">项目名称</label>
+                <label htmlFor="project-name">目标探索名称</label>
                 <input
+                  ref={nameInput}
                   id="project-name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
@@ -393,13 +683,14 @@ function ProjectDrawer({
             <div className="project-create-form__field">
               <label htmlFor="project-root">
                 {mode === "create"
-                  ? "项目父文件夹"
+                  ? "保存位置"
                   : mode === "add"
-                    ? "已有项目文件夹"
-                    : `「${targetProject?.name}」的新文件夹`}
+                    ? "目标探索文件夹"
+                    : `「${targetProject?.name}」的新位置`}
               </label>
               <div className="project-path-picker">
                 <input
+                  ref={rootInput}
                   id="project-root"
                   value={root}
                   onChange={(event) => setRoot(event.target.value)}
@@ -425,8 +716,8 @@ function ProjectDrawer({
               ) : (
                 <small className="project-create-form__hint">
                   {mode === "create"
-                    ? "项目内容保存在新建目录；最近项目列表等设置保存在本机。"
-                    : "选择包含 map.md 与 issues/ 的 Wayfinder 项目文件夹，也可以手动输入路径。"}
+                    ? "地图与探索记录保存在新建目录；目标探索列表保存在本机。"
+                    : "选择包含 map.md 与 issues/ 的 Wayfinder 目标探索文件夹，也可以手动输入路径。"}
                 </small>
               )}
             </div>
@@ -448,15 +739,165 @@ function ProjectDrawer({
           </form>
         ) : (
           <footer>
-            <button type="button" onClick={() => { setMode("create"); setName(""); setRoot(""); }}>
-              <span aria-hidden="true">＋</span> 新建项目
+            <button type="button" onClick={() => {
+              setMode("create");
+              setReleaseProject(undefined);
+              setName("");
+              setRoot("");
+            }}>
+              <span aria-hidden="true">＋</span> 新建目标探索
             </button>
             <button type="button" onClick={beginAdd} disabled={busy}>
-              选择已有项目
+              打开本地目标探索
             </button>
+            {index.activeProjectId ? (
+              <button
+                type="button"
+                className="project-drawer__stand-down"
+                onClick={() => {
+                  actions.clearError();
+                  void actions.deactivateProject().then(onClose).catch(() => undefined);
+                }}
+                disabled={busy}
+              >
+                返回目标探索入口
+              </button>
+            ) : null}
           </footer>
         )}
       </section>
+    </div>
+  );
+}
+
+const PROJECT_RELEASE_HOLD_MS = 1_200;
+const PROJECT_RELEASE_SEQUENCE_MS = 460;
+
+function ProjectReleaseConsole({
+  project,
+  busy,
+  returnToLibrary,
+  onCancel,
+  onConfirm,
+}: {
+  project: CampaignProjectView;
+  busy: boolean;
+  returnToLibrary: boolean;
+  onCancel(): void;
+  onConfirm(): Promise<void>;
+}) {
+  const [phase, setPhase] = useState<"idle" | "holding" | "releasing">("idle");
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const committed = useRef(false);
+
+  const cancelHold = () => {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = undefined;
+    }
+    if (!committed.current) {
+      setPhase("idle");
+    }
+  };
+
+  const commit = async () => {
+    if (committed.current || busy) {
+      return;
+    }
+    committed.current = true;
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = undefined;
+    }
+    setPhase("releasing");
+    try {
+      await new Promise((resolve) => setTimeout(resolve, PROJECT_RELEASE_SEQUENCE_MS));
+      await onConfirm();
+    } catch {
+      committed.current = false;
+      setPhase("idle");
+    }
+  };
+
+  const startHold = () => {
+    if (phase !== "idle" || busy || committed.current) {
+      return;
+    }
+    setPhase("holding");
+    holdTimer.current = setTimeout(() => void commit(), PROJECT_RELEASE_HOLD_MS);
+  };
+
+  useEffect(() => () => {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+    }
+  }, []);
+
+  return (
+    <div
+      className={`project-release-console project-release-console--${phase} project-release-console--trash`}
+      aria-label={`删除目标探索「${project.name}」并移到废纸篓`}
+    >
+      <div className="project-release-console__radar" aria-hidden="true">
+        <i />
+        <b />
+        <span />
+      </div>
+      <div className="project-release-console__copy">
+        <small>DELETE · 移入系统废纸篓</small>
+        <strong>删除「{project.name}」？</strong>
+        <p>{returnToLibrary
+          ? "系统会关闭当前会话并返回目标探索入口；随后整个目录将移入废纸篓。"
+          : "该目录、地图与探索记录将一起移入系统废纸篓，之后仍可恢复。"}</p>
+        <code>{project.root}</code>
+      </div>
+      <div className="project-release-console__actions">
+        <button
+          type="button"
+          className="project-release-console__cancel"
+          onClick={() => { cancelHold(); onCancel(); }}
+          disabled={busy || phase === "releasing"}
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          className={`project-release-console__hold${phase === "holding" ? " is-holding" : ""}`}
+          style={{ "--release-hold": `${PROJECT_RELEASE_HOLD_MS}ms` } as React.CSSProperties}
+          onPointerDown={(event) => { event.preventDefault(); startHold(); }}
+          onPointerUp={cancelHold}
+          onPointerLeave={cancelHold}
+          onPointerCancel={cancelHold}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void commit();
+            } else if (event.key === " ") {
+              event.preventDefault();
+              startHold();
+            }
+          }}
+          onKeyUp={(event) => {
+            if (event.key === " ") {
+              event.preventDefault();
+              cancelHold();
+            }
+          }}
+          disabled={busy || phase === "releasing"}
+          aria-label="鼠标或触控按住 1.2 秒删除并移到废纸篓；键盘按 Enter 确认"
+          aria-busy={busy || phase === "releasing"}
+        >
+          <span className="project-release-console__hold-track" aria-hidden="true"><i /></span>
+          <span className="project-release-console__hold-label">
+            {phase === "releasing" || busy
+              ? "正在移入废纸篓…"
+              : phase === "holding"
+                ? "保持按住…"
+                : "按住删除 · 1.2s"}
+          </span>
+        </button>
+      </div>
+      <p className="project-release-console__hint">鼠标或触控按住完成 · 键盘按 Enter 确认</p>
     </div>
   );
 }
@@ -484,7 +925,7 @@ function EmptyProjectStage({
           这里还没有 `map.md`。地图 Agent 会先与你建立目的地，再围绕目的地建立起点；探索背景、可作为证据的资料和必要的定向核对都属于建立起点的连续对话。两端建立后，才会记录当前能够明确表达的待探索议题、迷雾与范围边界。首张地图只有起点和目的地两个节点，不会预先虚构路线。
         </p>
         <div className="empty-project-stage__path">
-          <span>项目目录</span>
+          <span>目标探索目录</span>
           <code>{project.root}</code>
         </div>
         <ChartingProgressSteps phase={charting?.phase ?? "destination"} />
@@ -1268,7 +1709,7 @@ function ExpeditionPanel({
         <div className="expedition-launch">
           {expedition?.error ? <p className="expedition-error">{expedition.error}</p> : null}
           <p>
-            Codex 会围绕这个地点一次问一个问题；你的回答和走过的思路会留在旅程记录里。
+            Codex 会围绕这个地点一次问一个问题；你的回答和思考过程会保留在探索记录里。
           </p>
           <button
             type="button"
@@ -1514,7 +1955,7 @@ function DecisionProposalCard({
         <ProposalDetail label="证据" items={proposal.evidenceRefs} />
       </details>
       {expedition.state === "drafted" ? (
-        <p className="proposal-deferred">草案会保留在这次旅程中；地图与 Markdown 都没有变化。</p>
+        <p className="proposal-deferred">草案会保留在本次目标探索中；地图与 Markdown 都没有变化。</p>
       ) : null}
       {stale ? (
         <p className="proposal-stale">地图在草案形成后已变化。请继续探索，或根据新地图重新形成草案。</p>
@@ -1603,7 +2044,7 @@ function DestinationPanel({ campaign }: { campaign: CampaignProjection }) {
   return (
     <article className="destination-panel">
       <p className="location-kicker"><span>◎</span> NORTH STAR</p>
-      <h2>这段旅程要抵达哪里</h2>
+      <h2>这次目标探索要抵达哪里</h2>
       <div className="destination-panel__statement">
         <span aria-hidden="true">“</span>
         <p>{campaign.destination}</p>
@@ -1622,7 +2063,7 @@ function StartPanel({ campaign }: { campaign: CampaignProjection }) {
   return (
     <article className="destination-panel start-panel">
       <p className="location-kicker"><span>◇</span> START</p>
-      <h2>这段旅程从哪里开始</h2>
+      <h2>这次目标探索从哪里开始</h2>
       <div className="destination-panel__statement">
         <p>{campaign.startingState || "尚未记录起点。"}</p>
       </div>
@@ -1678,7 +2119,7 @@ function LoadingWorld({ error }: { error?: string }) {
     <main className="loading-world">
       <div className="loading-world__compass" aria-hidden="true"><i /></div>
       <p className="ui-eyebrow">WAYFINDER EXPLORER</p>
-      <h1>{error ? "暂时看不清地图" : "正在展开旅程地图"}</h1>
+      <h1>{error ? "暂时看不清地图" : "正在载入目标探索"}</h1>
       <p>{error ?? "读取地点、足迹与尚未打开的路线…"}</p>
     </main>
   );
@@ -1788,7 +2229,7 @@ function mapStatusLabel(status: Location["status"]): string {
 
 function projectStatusLabel(project: CampaignProjectView): string {
   if (project.status === "empty") {
-    return "空项目";
+    return "等待绘制地图";
   }
   if (project.status === "missing") {
     return "需要重新关联";
@@ -1796,7 +2237,7 @@ function projectStatusLabel(project: CampaignProjectView): string {
   if (project.status === "invalid") {
     return `${project.blockingDiagnostics ?? 0} 个源问题`;
   }
-  return "旅程地图";
+  return "地图已建立";
 }
 
 function projectPreviewPath(parentRoot: string, projectName: string): string {

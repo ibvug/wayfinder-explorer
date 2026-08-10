@@ -19,6 +19,6 @@ export interface CampaignProjectView extends CampaignProjectRecord {
 }
 
 export interface CampaignProjectIndex {
-  activeProjectId: string;
+  activeProjectId?: string;
   projects: CampaignProjectView[];
 }
