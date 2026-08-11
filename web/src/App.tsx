@@ -343,7 +343,6 @@ function ProjectLaunchpad({
 
       <div className="project-launchpad__content">
         <div className="project-launchpad__mission">
-          <h1>准备出发</h1>
           <p>
             {recentProject
               ? "继续最近的目标探索，或选择另一段旅程。"

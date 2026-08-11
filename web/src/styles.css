@@ -2558,16 +2558,6 @@ button:focus-visible {
   text-align: center;
 }
 
-.project-launchpad__mission h1 {
-  margin: 0 0 12px;
-  color: #dce7e4;
-  font-family: var(--serif);
-  font-size: clamp(42px, 4.5vw, 56px);
-  font-weight: 470;
-  line-height: 1.05;
-  letter-spacing: -0.035em;
-}
-
 .project-launchpad__mission > p {
   margin: 0 0 22px;
   color: #758b86;
@@ -4252,8 +4242,6 @@ button:focus-visible {
     width: 190px;
     min-width: 190px;
   }
-
-  .project-launchpad__mission h1 { font-size: clamp(38px, 7vw, 48px); }
 
   .topbar {
     grid-template-columns: minmax(0, 1fr) auto;
