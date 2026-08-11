@@ -2225,6 +2225,9 @@ button:focus-visible {
 }
 
 .project-launchpad__content {
+  --project-turn: 0deg;
+  --project-counter-turn: 0deg;
+  --project-inner-turn: 0deg;
   display: grid;
   grid-template-columns: 1fr;
   grid-template-areas:
@@ -2232,55 +2235,86 @@ button:focus-visible {
     "mission";
   align-items: center;
   align-content: center;
-  row-gap: 34px;
-  width: min(460px, calc(100% - 48px));
+  row-gap: 18px;
+  width: min(780px, calc(100% - 48px));
   margin: 0 auto;
-  padding: 38px 0 46px;
+  padding: 26px 0 38px;
 }
 
 .project-launchpad__beacon {
   position: relative;
   grid-area: beacon;
   place-self: center;
-  width: 190px;
-  min-width: 190px;
+  width: clamp(210px, 28vh, 300px);
+  min-width: 210px;
   aspect-ratio: 1;
-  opacity: 0.72;
-  border: 1px solid rgba(95, 170, 160, 0.11);
+  opacity: 0.88;
+  border: 1px solid rgba(95, 170, 160, 0.16);
   border-radius: 50%;
   background:
-    linear-gradient(90deg, transparent 49.8%, rgba(95, 170, 160, 0.13) 50%, transparent 50.2%),
-    linear-gradient(transparent 49.8%, rgba(95, 170, 160, 0.13) 50%, transparent 50.2%),
-    radial-gradient(circle, rgba(95, 170, 160, 0.08), transparent 58%);
-  box-shadow: inset 0 0 90px rgba(4, 12, 14, 0.8), 0 0 80px rgba(40, 104, 94, 0.08);
+    linear-gradient(90deg, transparent 49.8%, rgba(95, 170, 160, 0.16) 50%, transparent 50.2%),
+    linear-gradient(transparent 49.8%, rgba(95, 170, 160, 0.16) 50%, transparent 50.2%),
+    radial-gradient(circle, rgba(95, 170, 160, 0.12), transparent 62%);
+  box-shadow: inset 0 0 110px rgba(4, 12, 14, 0.82), 0 0 90px rgba(40, 104, 94, 0.1);
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+.project-launchpad__content:is(:hover, :focus-within) .project-launchpad__beacon {
+  opacity: 1;
+  filter: drop-shadow(0 0 18px rgba(57, 133, 121, 0.12));
 }
 
 .project-launchpad__beacon::before,
 .project-launchpad__beacon::after {
   position: absolute;
-  border: 1px solid rgba(95, 170, 160, 0.11);
+  z-index: 1;
+  border: 1px solid rgba(95, 170, 160, 0.14);
   border-radius: 50%;
   content: "";
+  pointer-events: none;
 }
 
-.project-launchpad__beacon::before { inset: 12%; }
+.project-launchpad__beacon::before { inset: 10%; }
 .project-launchpad__beacon::after { inset: 38%; border-style: dashed; }
+
+.project-launchpad__gear-ticks {
+  position: absolute;
+  z-index: 0;
+  inset: -3%;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    rgba(130, 184, 174, 0.64) 0deg 0.55deg,
+    transparent 0.55deg 3.75deg
+  );
+  opacity: 0.42;
+  -webkit-mask: radial-gradient(circle, transparent 0 88%, #000 88.3% 90.2%, transparent 90.5%);
+  mask: radial-gradient(circle, transparent 0 88%, #000 88.3% 90.2%, transparent 90.5%);
+  animation: launchpad-gear-awake 18s linear infinite paused;
+  transition: opacity 180ms ease;
+}
+
+.project-launchpad__content:is(:hover, :focus-within) .project-launchpad__gear-ticks {
+  opacity: 0.75;
+  animation-play-state: running;
+}
 
 .project-launchpad__orbit {
   position: absolute;
-  inset: 7%;
+  z-index: 2;
+  inset: 5%;
   border: 1px solid transparent;
   border-top-color: rgba(118, 191, 178, 0.45);
   border-radius: 50%;
-  animation: launchpad-orbit 14s linear infinite;
+  transform: rotate(var(--project-turn));
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease;
 }
 
 .project-launchpad__orbit i {
   position: absolute;
-  top: 11%;
-  right: 10%;
-  width: 7px;
-  height: 7px;
+  top: 8%;
+  right: 13%;
+  width: 8px;
+  height: 8px;
   border: 1px solid var(--amber);
   background: #071214;
   box-shadow: 0 0 15px rgba(233, 169, 74, 0.38);
@@ -2288,11 +2322,11 @@ button:focus-visible {
 }
 
 .project-launchpad__orbit--middle {
-  inset: 22%;
+  inset: 18%;
   border-top-color: transparent;
   border-right-color: rgba(118, 191, 178, 0.3);
-  animation-duration: 10s;
-  animation-direction: reverse;
+  border-bottom-color: rgba(118, 191, 178, 0.14);
+  transform: rotate(var(--project-counter-turn));
 }
 
 .project-launchpad__orbit--middle i {
@@ -2306,18 +2340,42 @@ button:focus-visible {
 }
 
 .project-launchpad__orbit--inner {
-  inset: 34%;
+  inset: 31%;
   border-bottom-color: rgba(233, 169, 74, 0.35);
   border-top-color: transparent;
-  animation-duration: 7s;
+  transform: rotate(var(--project-inner-turn));
 }
 
 .project-launchpad__orbit--inner i { display: none; }
 
+.project-launchpad__dial-index {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  right: -16px;
+  width: 36px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--amber), rgba(233, 169, 74, 0));
+  box-shadow: 0 0 12px rgba(233, 169, 74, 0.25);
+  transform: translateY(-50%);
+}
+
+.project-launchpad__dial-index i {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--amber);
+  background: #071214;
+  box-shadow: 0 0 16px rgba(233, 169, 74, 0.36);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
 .project-launchpad__beacon > b {
   position: absolute;
-  z-index: 2;
-  inset: 44%;
+  z-index: 5;
+  inset: 42%;
   display: grid;
   place-items: center;
   border: 1px solid rgba(233, 169, 74, 0.65);
@@ -2334,7 +2392,7 @@ button:focus-visible {
   box-shadow: 0 0 10px rgba(246, 200, 121, 0.7);
 }
 
-@keyframes launchpad-orbit {
+@keyframes launchpad-gear-awake {
   to { transform: rotate(360deg); }
 }
 
@@ -2554,7 +2612,7 @@ button:focus-visible {
 .project-launchpad__mission {
   grid-area: mission;
   width: 100%;
-  max-width: 460px;
+  max-width: 780px;
   text-align: center;
 }
 
@@ -2779,6 +2837,295 @@ button:focus-visible {
 .project-launchpad__secondary button span {
   margin-right: 4px;
   color: #96aaa5;
+}
+
+.project-launchpad__reel {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 184px;
+  margin: 0 auto;
+  overflow: hidden;
+  outline: none;
+  cursor: ns-resize;
+  touch-action: pan-x;
+}
+
+.project-launchpad__reel::before {
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(transparent, rgba(95, 170, 160, 0.14) 22%, rgba(95, 170, 160, 0.14) 78%, transparent);
+  content: "";
+}
+
+.project-launchpad__reel:focus-visible {
+  outline: 1px solid rgba(233, 169, 74, 0.62);
+  outline-offset: 5px;
+}
+
+.project-launchpad__reel-item {
+  position: absolute;
+  left: 50%;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  width: calc(100% - 16px);
+  min-width: 0;
+  padding: 0 18px;
+  border: 1px solid rgba(111, 159, 149, 0.14);
+  border-radius: 0;
+  background: rgba(8, 20, 21, 0.56);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transform: translateX(-50%);
+  transition: opacity 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.project-launchpad__reel-item:disabled {
+  cursor: wait;
+}
+
+.project-launchpad__reel-item[data-position="previous"],
+.project-launchpad__reel-item[data-position="next"] {
+  z-index: 1;
+  height: 56px;
+  opacity: 0.42;
+}
+
+.project-launchpad__reel-item[data-position="previous"] {
+  top: 0;
+  border-bottom-color: rgba(111, 159, 149, 0.2);
+  background: linear-gradient(180deg, rgba(8, 20, 21, 0.18), rgba(8, 20, 21, 0.64));
+}
+
+.project-launchpad__reel-item[data-position="next"] {
+  bottom: 0;
+  border-top-color: rgba(111, 159, 149, 0.2);
+  background: linear-gradient(0deg, rgba(8, 20, 21, 0.18), rgba(8, 20, 21, 0.64));
+}
+
+.project-launchpad__reel-item[data-position="previous"]:hover,
+.project-launchpad__reel-item[data-position="next"]:hover {
+  border-color: rgba(116, 175, 164, 0.28);
+  opacity: 0.68;
+}
+
+.project-launchpad__reel-item[data-position="current"] {
+  z-index: 3;
+  top: 50%;
+  width: 100%;
+  height: 80px;
+  border-color: rgba(118, 179, 167, 0.3);
+  background:
+    linear-gradient(90deg, rgba(40, 100, 90, 0.11), transparent 72%),
+    rgba(7, 18, 20, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  transform: translate(-50%, -50%);
+}
+
+.project-launchpad__reel-item[data-position="current"]::before {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: -1px;
+  width: 2px;
+  background: var(--amber);
+  box-shadow: 0 0 16px rgba(233, 169, 74, 0.36);
+  content: "";
+}
+
+.project-launchpad__reel-item[data-position="current"]:hover {
+  border-color: rgba(233, 169, 74, 0.46);
+  background:
+    linear-gradient(90deg, rgba(40, 100, 90, 0.16), rgba(233, 169, 74, 0.025) 76%),
+    #081518;
+}
+
+.project-launchpad__reel[data-direction="next"] .project-launchpad__reel-item {
+  animation: project-reel-settle-next 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.project-launchpad__reel[data-direction="previous"] .project-launchpad__reel-item {
+  animation: project-reel-settle-previous 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes project-reel-settle-next {
+  from { translate: 0 12px; }
+}
+
+@keyframes project-reel-settle-previous {
+  from { translate: 0 -12px; }
+}
+
+.project-launchpad__reel-sigil {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(95, 170, 160, 0.24);
+  background: rgba(95, 170, 160, 0.035);
+}
+
+.project-launchpad__reel-sigil i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(246, 200, 121, 0.82);
+  box-shadow: 0 0 12px rgba(233, 169, 74, 0.12);
+  transform: rotate(45deg);
+}
+
+.project-launchpad__reel-sigil--empty {
+  border-style: dashed;
+  border-color: rgba(233, 169, 74, 0.28);
+}
+
+.project-launchpad__reel-sigil--invalid {
+  border-color: rgba(200, 123, 98, 0.3);
+}
+
+.project-launchpad__reel-sigil--invalid i {
+  border-color: rgba(200, 123, 98, 0.78);
+}
+
+.project-launchpad__reel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.project-launchpad__reel-copy strong {
+  overflow: hidden;
+  color: #849b96;
+  font-size: 13px;
+  font-weight: 590;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-launchpad__reel-item[data-position="current"] .project-launchpad__reel-copy strong {
+  color: #dce9e5;
+  font-size: 17px;
+  font-weight: 630;
+}
+
+.project-launchpad__reel-copy small {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: #829994;
+  font-size: 10px;
+}
+
+.project-launchpad__reel-copy small span:last-child {
+  font-family: var(--mono);
+}
+
+.project-launchpad__reel-arrow {
+  justify-self: end;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 23px;
+  line-height: 1;
+  transition: color 160ms ease, translate 160ms ease;
+}
+
+.project-launchpad__reel-item[data-position="current"]:hover .project-launchpad__reel-arrow {
+  color: var(--amber-pale);
+  translate: 3px 0;
+}
+
+.project-launchpad__position {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 22px;
+  margin-top: 8px;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.project-launchpad__position i {
+  width: 10px;
+  height: 1px;
+  background: rgba(124, 178, 168, 0.52);
+}
+
+.project-launchpad__utilities {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.project-launchpad__utilities button {
+  padding: 7px 2px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: #687f7a;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 570;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.project-launchpad__utilities button:hover,
+.project-launchpad__utilities button:focus-visible {
+  border-bottom-color: rgba(122, 186, 174, 0.3);
+  color: #a7bbb6;
+}
+
+.project-launchpad__utilities button span {
+  margin-right: 6px;
+  color: #a4b9b3;
+  font-family: var(--mono);
+}
+
+.project-launchpad__empty-selector {
+  display: grid;
+  place-items: center;
+  min-height: 132px;
+  padding: 22px;
+  border: 1px solid rgba(111, 159, 149, 0.18);
+  background: rgba(8, 20, 21, 0.54);
+}
+
+.project-launchpad__empty-selector > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 12px;
+  border: 1px dashed rgba(233, 169, 74, 0.32);
+}
+
+.project-launchpad__empty-selector > span i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--amber);
+  transform: rotate(45deg);
+}
+
+.project-launchpad__empty-selector strong {
+  color: #b9cbc6;
+  font-size: 13px;
+}
+
+.project-launchpad__empty-selector small {
+  margin-top: 6px;
+  color: #617872;
+  font-size: 10px;
 }
 
 .project-launchpad__mission .project-launchpad__error {
@@ -4161,13 +4508,682 @@ button:focus-visible {
   font-size: 11px;
 }
 
+/* Reference-accurate project launcher */
+
+.explorer-app--library {
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+.project-launchpad {
+  position: relative;
+  display: block;
+  min-height: 100dvh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(31, 91, 83, 0.16), transparent 24%),
+    radial-gradient(circle at 29% 54%, rgba(16, 64, 59, 0.13), transparent 34%),
+    linear-gradient(90deg, rgba(105, 158, 151, 0.035) 1px, transparent 1px) 68px 8px / 128px 121px,
+    linear-gradient(rgba(105, 158, 151, 0.03) 1px, transparent 1px) 68px 8px / 128px 121px,
+    #061012;
+}
+
+.project-launchpad::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 45%, transparent 36%, rgba(0, 6, 8, 0.05) 78%, rgba(0, 5, 7, 0.12)),
+    linear-gradient(180deg, rgba(0, 4, 6, 0.015), transparent 24%, transparent 72%, rgba(0, 4, 6, 0.04));
+  content: "";
+  pointer-events: none;
+}
+
+.project-launchpad__header {
+  position: absolute;
+  z-index: 10;
+  top: 45px;
+  right: 59px;
+  left: 59px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.project-launchpad__brand {
+  display: flex;
+  align-items: center;
+  gap: 25px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.project-launchpad__brand .brand-mark {
+  position: relative;
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgba(128, 166, 163, 0.57);
+  border-radius: 50%;
+  background: rgba(4, 16, 18, 0.42);
+  box-shadow: inset 0 0 20px rgba(27, 73, 68, 0.08);
+  transform: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.project-launchpad__brand:hover .brand-mark,
+.project-launchpad__brand:focus-visible .brand-mark {
+  border-color: rgba(151, 196, 190, 0.78);
+  box-shadow: inset 0 0 20px rgba(27, 73, 68, 0.13), 0 0 18px rgba(42, 105, 96, 0.1);
+}
+
+.project-launchpad__brand .brand-mark::before,
+.project-launchpad__brand .brand-mark::after {
+  display: none;
+}
+
+.project-launchpad__brand .brand-mark i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 20px;
+  border-top: 0;
+  border-right: 1.5px solid #e7a73e;
+  border-bottom: 0;
+  border-left: 1.5px solid #e7a73e;
+  background:
+    linear-gradient(28deg, transparent 43%, #e7a73e 45% 55%, transparent 57%) 0 0 / 50% 6px no-repeat,
+    linear-gradient(-28deg, transparent 43%, #e7a73e 45% 55%, transparent 57%) 100% 0 / 50% 6px no-repeat,
+    linear-gradient(-28deg, transparent 43%, #e7a73e 45% 55%, transparent 57%) 0 100% / 50% 6px no-repeat,
+    linear-gradient(28deg, transparent 43%, #e7a73e 45% 55%, transparent 57%) 100% 100% / 50% 6px no-repeat,
+    linear-gradient(#e7a73e, #e7a73e) 0 4px / 1px 12px no-repeat,
+    linear-gradient(#e7a73e, #e7a73e) 100% 4px / 1px 12px no-repeat;
+  filter: drop-shadow(0 0 4px rgba(231, 167, 62, 0.26));
+  transform: translate(-50%, -50%);
+}
+
+.project-launchpad__brand .brand-mark i::before,
+.project-launchpad__brand .brand-mark i::after {
+  display: none;
+}
+
+.project-launchpad__brand .ui-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: rgba(169, 199, 195, 0.78);
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 560;
+  letter-spacing: 0;
+  line-height: 1;
+  text-shadow: 0 0 12px rgba(93, 157, 148, 0.12);
+}
+
+.project-launchpad__status {
+  color: #728b87;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.project-launchpad__content {
+  --project-turn: 0deg;
+  --project-counter-turn: 0deg;
+  --project-inner-turn: 0deg;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-areas:
+    "beacon"
+    "mission";
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  row-gap: 60px;
+  width: min(780px, calc(100% - 48px));
+  min-height: calc(100dvh - 72px);
+  margin: 72px auto 0;
+  padding: 0;
+}
+
+.project-launchpad__beacon {
+  position: relative;
+  grid-area: beacon;
+  place-self: center;
+  width: min(330px, 34.92vh);
+  min-width: 0;
+  aspect-ratio: 1;
+  opacity: 1;
+  border: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, transparent 0 32px, rgba(101, 171, 160, 0.27) 33px, transparent 34px),
+    radial-gradient(circle, transparent 0 94px, rgba(94, 151, 143, 0.24) 95px, transparent 96px),
+    linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(91, 153, 145, 0.15) 50%, transparent calc(50% + 0.5px)),
+    linear-gradient(transparent calc(50% - 0.5px), rgba(91, 153, 145, 0.15) 50%, transparent calc(50% + 0.5px)),
+    radial-gradient(circle, rgba(31, 102, 92, 0.18), rgba(9, 36, 35, 0.08) 34%, transparent 67%);
+  box-shadow: none;
+  filter: drop-shadow(0 0 24px rgba(35, 97, 89, 0.12));
+  translate: 0 -4.5px;
+}
+
+.project-launchpad__content:is(:hover, :focus-within) .project-launchpad__beacon {
+  opacity: 1;
+  filter: drop-shadow(0 0 28px rgba(42, 112, 102, 0.17));
+}
+
+.project-launchpad__beacon::before,
+.project-launchpad__beacon::after {
+  position: absolute;
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.project-launchpad__beacon::before {
+  z-index: 1;
+  inset: 8px;
+  border: 1px solid rgba(137, 184, 177, 0.52);
+  box-shadow: inset 0 0 0 8px rgba(83, 137, 129, 0.025);
+}
+
+.project-launchpad__beacon::after {
+  z-index: 1;
+  inset: 29px;
+  border: 1px dotted rgba(225, 165, 61, 0.48);
+  opacity: 0.7;
+}
+
+.project-launchpad__gear-ticks {
+  position: absolute;
+  z-index: 4;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  border-radius: 50%;
+  background: none;
+  opacity: 0.8;
+  -webkit-mask: none;
+  mask: none;
+  pointer-events: none;
+  animation: launchpad-gear-awake 36s linear infinite paused;
+  transition: opacity 180ms ease;
+}
+
+.project-launchpad__content:is(:hover, :focus-within) .project-launchpad__gear-ticks {
+  opacity: 0.96;
+  animation-play-state: running;
+}
+
+.project-launchpad__axis {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(rgba(111, 169, 161, 0.12), rgba(111, 169, 161, 0.5));
+  transform: translateX(-50%);
+}
+
+.project-launchpad__axis--north {
+  bottom: calc(100% + 5px);
+  height: 55px;
+}
+
+.project-launchpad__axis--north i {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 7px solid rgba(145, 197, 190, 0.76);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+  transform: translateX(-50%);
+}
+
+.project-launchpad__axis--south {
+  top: calc(100% + 5px);
+  height: 69px;
+  background: linear-gradient(rgba(111, 169, 161, 0.47), rgba(111, 169, 161, 0.2));
+}
+
+.project-launchpad__axis--south::before {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border: 1px solid rgba(129, 181, 173, 0.58);
+  background: #071214;
+  content: "";
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.project-launchpad__axis--south i {
+  position: absolute;
+  top: 39px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 8px solid rgba(151, 203, 195, 0.78);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+  transform: translateX(-50%);
+}
+
+.project-launchpad__orbit {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(113, 167, 159, 0.25);
+  border-radius: 50%;
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease;
+}
+
+.project-launchpad__orbit--outer {
+  inset: 15px;
+  border-top-color: rgba(146, 196, 188, 0.58);
+  border-right-color: rgba(225, 165, 61, 0.54);
+  transform: rotate(var(--project-turn));
+}
+
+.project-launchpad__orbit--outer i {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  border: 0;
+  border-radius: 50%;
+  background: #e6a841;
+  box-shadow: 0 0 8px rgba(230, 168, 65, 0.55);
+  transform: translateX(-50%);
+}
+
+.project-launchpad__orbit--middle {
+  inset: 32px;
+  border-color: transparent;
+  border-top-color: rgba(229, 170, 63, 0.46);
+  border-right-color: rgba(229, 170, 63, 0.16);
+  border-style: dotted;
+  transform: rotate(var(--project-counter-turn));
+}
+
+.project-launchpad__orbit--middle i {
+  display: none;
+}
+
+.project-launchpad__orbit--inner {
+  inset: 46px;
+  border-color: rgba(94, 151, 143, 0.13);
+  border-top-color: rgba(148, 204, 196, 0.8);
+  border-bottom-color: rgba(111, 199, 185, 0.78);
+  transform: rotate(var(--project-inner-turn));
+}
+
+.project-launchpad__orbit--inner i {
+  display: none;
+}
+
+.project-launchpad__cardinals {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(117, 183, 173, 0.68);
+  box-shadow:
+    0 -118px 0 -1px rgba(134, 194, 185, 0.76),
+    118px 0 0 -1px rgba(134, 194, 185, 0.54),
+    0 118px 0 -1px rgba(134, 194, 185, 0.64),
+    -118px 0 0 -1px rgba(134, 194, 185, 0.64);
+  transform: translate(-50%, -50%);
+}
+
+.project-launchpad__cardinals::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 366px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(93, 153, 145, 0.17) 10%, transparent 45%, transparent 55%, rgba(93, 153, 145, 0.17) 90%, transparent);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.project-launchpad__dial-index {
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  right: -16px;
+  width: 36px;
+  height: 1px;
+  background: linear-gradient(90deg, #e4a43b, rgba(228, 164, 59, 0.95) 68%, rgba(228, 164, 59, 0.55));
+  box-shadow: 0 0 12px rgba(228, 164, 59, 0.22);
+  transform: translateY(-50%);
+}
+
+.project-launchpad__dial-index i {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e9a63b;
+  background: #071214;
+  box-shadow: 0 0 15px rgba(233, 166, 59, 0.3);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.project-launchpad__beacon > b {
+  position: absolute;
+  z-index: 7;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  border: 1px solid rgba(174, 216, 210, 0.88);
+  background: rgba(7, 24, 25, 0.86);
+  box-shadow: 0 0 0 12px rgba(64, 143, 131, 0.035), 0 0 31px rgba(37, 126, 113, 0.18);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.project-launchpad__beacon > b i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f3b655;
+  box-shadow: 0 0 13px rgba(237, 169, 64, 0.58);
+}
+
+.project-launchpad__mission {
+  grid-area: mission;
+  width: 100%;
+  max-width: 780px;
+  text-align: center;
+  translate: 0 -1px;
+}
+
+.project-launchpad__reel {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 250px;
+  margin: 0 auto;
+  overflow: hidden;
+  outline: none;
+  cursor: ns-resize;
+  touch-action: pan-x;
+}
+
+.project-launchpad__reel::before {
+  position: absolute;
+  z-index: -1;
+  top: -8px;
+  bottom: -8px;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(transparent, rgba(100, 160, 152, 0.22) 18%, rgba(100, 160, 152, 0.22) 82%, transparent);
+  content: "";
+}
+
+.project-launchpad__reel:focus-visible {
+  outline: 1px solid rgba(232, 171, 65, 0.58);
+  outline-offset: 5px;
+}
+
+.project-launchpad__reel-item {
+  position: absolute;
+  left: 50%;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 44px;
+  column-gap: 24px;
+  align-items: center;
+  width: calc(100% - 12px);
+  min-width: 0;
+  padding: 0 32px 0 36px;
+  border: 1px solid rgba(102, 154, 146, 0.14);
+  border-radius: 0;
+  background: rgba(5, 17, 19, 0.36);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transform: translateX(-50%);
+  transition: opacity 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.project-launchpad__reel-item:disabled {
+  cursor: wait;
+}
+
+.project-launchpad__reel-item[data-position="previous"],
+.project-launchpad__reel-item[data-position="next"] {
+  z-index: 1;
+  height: 76px;
+  opacity: 0.6;
+}
+
+.project-launchpad__reel-item[data-position="previous"] {
+  top: 0;
+  background: linear-gradient(180deg, rgba(4, 14, 16, 0.14), rgba(7, 21, 22, 0.42));
+}
+
+.project-launchpad__reel-item[data-position="next"] {
+  bottom: 0;
+  background: linear-gradient(0deg, rgba(4, 14, 16, 0.14), rgba(7, 21, 22, 0.42));
+}
+
+.project-launchpad__reel-item[data-position="previous"]:hover,
+.project-launchpad__reel-item[data-position="next"]:hover {
+  border-color: rgba(116, 175, 164, 0.28);
+  opacity: 0.7;
+}
+
+.project-launchpad__reel-item[data-position="current"] {
+  z-index: 3;
+  top: 50%;
+  width: calc(100% - 4px);
+  height: 99px;
+  padding-left: 40px;
+  border-color: rgba(106, 166, 156, 0.3);
+  background:
+    linear-gradient(90deg, rgba(38, 97, 88, 0.11), transparent 72%),
+    rgba(5, 17, 19, 0.91);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.2);
+  transform: translate(-50%, -50%);
+}
+
+.project-launchpad__reel-item[data-position="current"]::before {
+  position: absolute;
+  z-index: 4;
+  top: 1px;
+  bottom: 1px;
+  left: -1px;
+  width: 2px;
+  background: #eeb45d;
+  box-shadow: 0 0 16px rgba(230, 164, 59, 0.32);
+  content: "";
+}
+
+.project-launchpad__reel-item[data-position="current"]:hover {
+  border-color: rgba(230, 168, 64, 0.46);
+  background:
+    linear-gradient(90deg, rgba(38, 97, 88, 0.15), rgba(230, 168, 64, 0.025) 77%),
+    #061416;
+}
+
+.project-launchpad__reel-sigil {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(115, 172, 162, 0.48);
+  background: rgba(95, 170, 160, 0.025);
+  transform: rotate(45deg);
+}
+
+.project-launchpad__reel-sigil i {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  background: rgba(125, 179, 170, 0.72);
+  box-shadow: 0 0 10px rgba(83, 148, 138, 0.2);
+  transform: none;
+}
+
+.project-launchpad__reel-item[data-position="current"] .project-launchpad__reel-sigil {
+  border: 2px solid #e9a93d;
+}
+
+.project-launchpad__reel-item[data-position="current"] .project-launchpad__reel-sigil i {
+  background: #e8a73d;
+  box-shadow: 0 0 10px rgba(232, 167, 61, 0.34);
+}
+
+.project-launchpad__reel-sigil--empty {
+  border-style: dashed;
+  border-color: rgba(233, 169, 74, 0.55);
+}
+
+.project-launchpad__reel-sigil--invalid {
+  border-color: rgba(200, 123, 98, 0.66);
+}
+
+.project-launchpad__reel-sigil--invalid i {
+  background: rgba(200, 123, 98, 0.82);
+}
+
+.project-launchpad__reel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.project-launchpad__reel-copy strong {
+  overflow: hidden;
+  color: #91a9a4;
+  font-size: 24px;
+  font-weight: 420;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-launchpad__reel-item[data-position="current"] .project-launchpad__reel-copy strong {
+  color: #cce5e0;
+  font-size: 28px;
+  font-weight: 520;
+  text-shadow: 0 0 13px rgba(97, 180, 166, 0.14);
+}
+
+.project-launchpad__reel-copy small {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  color: #809b96;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.project-launchpad__reel-copy small span:last-child {
+  font-family: "Segoe UI Symbol", "Microsoft YaHei", sans-serif;
+}
+
+.project-launchpad__reel-arrow {
+  justify-self: end;
+  color: #e5a43a;
+  font-family: var(--mono);
+  font-size: 40px;
+  font-weight: 300;
+  line-height: 1;
+  transition: color 160ms ease, translate 160ms ease;
+}
+
+.project-launchpad__reel-item[data-position="current"]:hover .project-launchpad__reel-arrow {
+  color: #f0b24d;
+  translate: 3px 0;
+}
+
+.project-launchpad__position {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 42px;
+  min-height: 32px;
+  margin-top: 38px;
+  color: #e5a43a;
+  font-family: var(--mono);
+  font-size: 17px;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.project-launchpad__position::before {
+  position: absolute;
+  bottom: calc(100% + 21px);
+  left: 50%;
+  width: 1px;
+  height: 27px;
+  background: linear-gradient(rgba(113, 170, 162, 0.46), rgba(113, 170, 162, 0.28));
+  content: "";
+}
+
+.project-launchpad__position::after {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-right: 4px solid transparent;
+  border-bottom: 7px solid rgba(135, 190, 182, 0.65);
+  border-left: 4px solid transparent;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.project-launchpad__position i {
+  width: 10px;
+  height: 2px;
+  background: rgba(128, 187, 178, 0.7);
+}
+
+.project-launchpad__position > i {
+  translate: 0 18px;
+}
+
+.project-launchpad__position > span {
+  scale: 0.92 1;
+  translate: 0 19px;
+}
+
+.project-launchpad__mission .project-launchpad__error {
+  position: absolute;
+  right: 0;
+  bottom: 14px;
+  left: 0;
+  width: min(780px, calc(100% - 48px));
+  margin: 0 auto;
+}
+
 @media (max-width: 1120px) {
   .project-launchpad__content {
     grid-template-columns: 1fr;
     grid-template-areas:
       "beacon"
       "mission";
-    width: min(460px, calc(100% - 48px));
+    width: min(720px, calc(100% - 48px));
   }
 
   .topbar {
@@ -4234,12 +5250,12 @@ button:focus-visible {
     grid-template-areas:
       "beacon"
       "mission";
-    width: min(460px, calc(100% - 40px));
-    padding: 38px 0 44px;
+    width: min(680px, calc(100% - 40px));
+    padding: 28px 0 38px;
   }
 
   .project-launchpad__beacon {
-    width: 190px;
+    width: clamp(190px, 26vh, 240px);
     min-width: 190px;
   }
 
@@ -4323,17 +5339,63 @@ button:focus-visible {
     grid-template-areas:
       "beacon"
       "mission";
-    width: min(430px, calc(100% - 40px));
-    row-gap: 26px;
+    width: calc(100% - 32px);
+    row-gap: 14px;
+    padding: 24px 0 30px;
   }
 
   .project-launchpad__beacon {
     display: block;
-    width: 145px;
-    min-width: 145px;
+    width: 170px;
+    min-width: 170px;
   }
 
-  .project-launchpad__primary { padding-right: 14px; padding-left: 14px; }
+  .project-launchpad__dial-index {
+    right: -10px;
+    width: 26px;
+  }
+
+  .project-launchpad__reel {
+    height: 174px;
+  }
+
+  .project-launchpad__reel-item {
+    grid-template-columns: 38px minmax(0, 1fr) 34px;
+    width: calc(100% - 8px);
+    padding: 0 12px;
+  }
+
+  .project-launchpad__reel-item[data-position="current"] {
+    width: 100%;
+    height: 76px;
+  }
+
+  .project-launchpad__reel-item[data-position="previous"],
+  .project-launchpad__reel-item[data-position="next"] {
+    height: 52px;
+  }
+
+  .project-launchpad__reel-sigil {
+    width: 30px;
+    height: 30px;
+  }
+
+  .project-launchpad__reel-copy strong {
+    font-size: 11.5px;
+  }
+
+  .project-launchpad__reel-item[data-position="current"] .project-launchpad__reel-copy strong {
+    font-size: 13px;
+  }
+
+  .project-launchpad__reel-copy small {
+    gap: 10px;
+    font-size: 9px;
+  }
+
+  .project-launchpad__reel-arrow {
+    font-size: 19px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

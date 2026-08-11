@@ -36,7 +36,14 @@ import {
   START_CHARTING_ACTION_LABEL,
 } from "./ChartingProgress.ts";
 import { MessageComposer } from "./MessageComposer.ts";
+import dialTicksUrl from "./dial-ticks.svg";
 import type { ConnectionState, ExpeditionActions, Selection } from "./app-types.ts";
+import {
+  consumeProjectWheel,
+  openableProjects,
+  projectAfterStep,
+  wrapProjectIndex,
+} from "./project-selector.ts";
 import { useCampaign } from "./use-campaign.ts";
 import { useModalDialog } from "./use-modal-dialog.ts";
 
@@ -306,12 +313,11 @@ export function App() {
   );
 }
 
-function ProjectLaunchpad({
+export function ProjectLaunchpad({
   index,
   actions,
   connection,
   onContinue,
-  onCreate,
   onOpenLibrary,
 }: {
   index: CampaignProjectIndex;
@@ -321,19 +327,149 @@ function ProjectLaunchpad({
   onCreate(): void;
   onOpenLibrary(): void;
 }) {
-  const recentProject = index.projects.find(({ status }) => status !== "missing");
-  const continuing = recentProject && actions.busyTarget === `project:${recentProject.id}`;
-  const recentResolved = recentProject?.resolved ?? 0;
-  const recentProgress = recentProject?.total
-    ? Math.min(100, Math.round((recentResolved / recentProject.total) * 100))
-    : 0;
+  const projects = useMemo(
+    () => openableProjects(index.projects),
+    [index.projects],
+  );
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(() => projects[0]?.id);
+  const [dialStep, setDialStep] = useState(0);
+  const [motionDirection, setMotionDirection] = useState<-1 | 0 | 1>(0);
+  const [motionRevision, setMotionRevision] = useState(0);
+  const selector = useRef<HTMLDivElement>(null);
+  const wheelAccumulator = useRef(0);
+  const wheelResetTimer = useRef<number | undefined>(undefined);
+  const touchStartY = useRef<number | undefined>(undefined);
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    if (selectedProjectId && projects.some(({ id }) => id === selectedProjectId)) {
+      return;
+    }
+    setSelectedProjectId(projects[0]?.id);
+  }, [projects, selectedProjectId]);
+
+  const selectedIndex = Math.max(0, projects.findIndex(({ id }) => id === selectedProjectId));
+  const selectedProject = projects[selectedIndex];
+  const busy = Boolean(actions.busyTarget?.startsWith("project:"));
+
+  const stepSelection = useCallback((delta: number) => {
+    if (projects.length < 2 || delta === 0) {
+      return;
+    }
+    setSelectedProjectId((currentId) => {
+      return projectAfterStep(projects, currentId, delta)?.id;
+    });
+    setDialStep((current) => current + delta);
+    setMotionDirection(delta > 0 ? 1 : -1);
+    setMotionRevision((current) => current + 1);
+  }, [projects]);
+
+  useEffect(() => {
+    const element = selector.current;
+    if (!element || projects.length < 2) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      const normalizedDelta = event.deltaMode === 1
+        ? event.deltaY * 16
+        : event.deltaMode === 2
+          ? event.deltaY * element.clientHeight
+          : event.deltaY;
+      const wheel = consumeProjectWheel(wheelAccumulator.current, normalizedDelta);
+      wheelAccumulator.current = wheel.accumulator;
+      if (wheel.steps !== 0) {
+        stepSelection(wheel.steps);
+      }
+      window.clearTimeout(wheelResetTimer.current);
+      wheelResetTimer.current = window.setTimeout(() => {
+        wheelAccumulator.current = 0;
+      }, 160);
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      element.removeEventListener("wheel", handleWheel);
+      window.clearTimeout(wheelResetTimer.current);
+    };
+  }, [projects.length, stepSelection]);
+
+  const handleSelectorKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      stepSelection(-1);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      stepSelection(1);
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      stepSelection(-Math.min(3, projects.length - 1));
+    } else if (event.key === "PageDown") {
+      event.preventDefault();
+      stepSelection(Math.min(3, projects.length - 1));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      stepSelection(-selectedIndex);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      stepSelection(projects.length - selectedIndex - 1);
+    } else if ((event.key === "Enter" || event.key === " ") && selectedProject && !busy) {
+      event.preventDefault();
+      onContinue(selectedProject);
+    }
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" || projects.length < 2) {
+      return;
+    }
+    touchStartY.current = event.clientY;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const startY = touchStartY.current;
+    touchStartY.current = undefined;
+    if (startY === undefined) {
+      return;
+    }
+    const distance = startY - event.clientY;
+    if (Math.abs(distance) < 32) {
+      return;
+    }
+    suppressClick.current = true;
+    stepSelection(distance > 0 ? 1 : -1);
+    window.setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
+  };
+
+  const slotOffsets = projects.length > 2 ? [-1, 0, 1] : projects.length === 2 ? [0, 1] : [0];
+  const activeOptionId = selectedProject ? `project-launchpad-option-${selectedIndex}` : undefined;
+  const dialStyle = {
+    "--project-turn": `${dialStep * 30}deg`,
+    "--project-counter-turn": `${dialStep * -17}deg`,
+    "--project-inner-turn": `${dialStep * 11}deg`,
+  } as React.CSSProperties;
+
   return (
     <section className="project-launchpad" aria-label="Wayfinder 目标探索入口">
       <header className="project-launchpad__header">
-        <div className="project-launchpad__brand">
+        <button
+          type="button"
+          className="project-launchpad__brand"
+          onClick={onOpenLibrary}
+          aria-label="管理目标探索"
+        >
           <span className="brand-mark" aria-hidden="true"><i /></span>
-          <p className="ui-eyebrow">WAYFINDER</p>
-        </div>
+          <p className="ui-eyebrow" aria-label="WAYFINDER">
+            {[..."WAYFINDER"].map((letter, index) => (
+              <span key={`${letter}-${index}`} aria-hidden="true">{letter}</span>
+            ))}
+          </p>
+        </button>
         {connection !== "live" ? (
           <div className={`project-launchpad__status project-launchpad__status--${connection}`}>
             <i aria-hidden="true" />正在连接
@@ -341,59 +477,101 @@ function ProjectLaunchpad({
         ) : null}
       </header>
 
-      <div className="project-launchpad__content">
+      <div className="project-launchpad__content" style={dialStyle}>
+        <div className="project-launchpad__beacon" aria-hidden="true">
+          <img className="project-launchpad__gear-ticks" src={dialTicksUrl} alt="" />
+          <span className="project-launchpad__axis project-launchpad__axis--north"><i /></span>
+          <span className="project-launchpad__axis project-launchpad__axis--south"><i /></span>
+          <span className="project-launchpad__orbit project-launchpad__orbit--outer"><i /></span>
+          <span className="project-launchpad__orbit project-launchpad__orbit--middle"><i /></span>
+          <span className="project-launchpad__orbit project-launchpad__orbit--inner"><i /></span>
+          <span className="project-launchpad__cardinals" />
+          <span className="project-launchpad__dial-index"><i /></span>
+          <b><i /></b>
+        </div>
+
         <div className="project-launchpad__mission">
-          <p>
-            {recentProject
-              ? "继续最近的目标探索，或选择另一段旅程。"
-              : "选择一个目标探索，开始前进。"}
-          </p>
+          {selectedProject ? (
+            <>
+              <div
+                ref={selector}
+                className="project-launchpad__reel"
+                role="listbox"
+                tabIndex={0}
+                aria-activedescendant={activeOptionId}
+                aria-label={`目标探索选择器，当前 ${selectedProject.name}`}
+                aria-busy={busy}
+                data-direction={motionDirection > 0 ? "next" : motionDirection < 0 ? "previous" : "idle"}
+                onKeyDown={handleSelectorKeyDown}
+                onPointerDown={handlePointerDown}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={() => {
+                  touchStartY.current = undefined;
+                }}
+              >
+                {slotOffsets.map((offset) => {
+                  const projectIndex = wrapProjectIndex(selectedIndex + offset, projects.length);
+                  const project = projects[projectIndex]!;
+                  const current = offset === 0;
+                  const position = current ? "current" : offset < 0 ? "previous" : "next";
+                  const resolved = project.resolved ?? 0;
+                  return (
+                    <button
+                      key={`${motionRevision}:${position}:${project.id}`}
+                      id={`project-launchpad-option-${projectIndex}`}
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={current}
+                      aria-label={current ? `打开目标探索 ${project.name}` : `选择目标探索 ${project.name}`}
+                      className="project-launchpad__reel-item"
+                      data-position={position}
+                      disabled={busy}
+                      onClick={() => {
+                        if (suppressClick.current) {
+                          return;
+                        }
+                        if (current) {
+                          onContinue(project);
+                        } else {
+                          selector.current?.focus();
+                          stepSelection(offset);
+                        }
+                      }}
+                    >
+                      <span className={`project-launchpad__reel-sigil project-launchpad__reel-sigil--${project.status}`} aria-hidden="true"><i /></span>
+                      <span className="project-launchpad__reel-copy">
+                        <strong>{project.name}</strong>
+                        {current ? (
+                          <small>
+                            <span>{projectStatusLabel(project)}</span>
+                            <span>{project.total !== undefined ? `${resolved} / ${project.total}` : "可继续"}</span>
+                          </small>
+                        ) : null}
+                      </span>
+                      {current ? (
+                        <span className="project-launchpad__reel-arrow" aria-hidden="true">
+                          {actions.busyTarget === `project:${project.id}` ? "…" : "→"}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
 
-          <button
-            type="button"
-            className={`project-launchpad__primary${recentProject ? "" : " project-launchpad__primary--single"}`}
-            onClick={() => recentProject ? onContinue(recentProject) : onOpenLibrary()}
-            disabled={Boolean(continuing)}
-            aria-label={recentProject
-              ? `继续最近的目标探索 ${recentProject.name}，${projectStatusLabel(recentProject)}${recentProject.total !== undefined ? `，${recentResolved}/${recentProject.total}` : ""}`
-              : "选择目标探索"}
-          >
-            {recentProject ? (
-              <>
-                <span className="project-launchpad__primary-sigil" aria-hidden="true"><i /></span>
-                <span className="project-launchpad__primary-body">
-                  <span className="project-launchpad__primary-kicker">
-                    <small>最近探索</small>
-                    <em>{projectStatusLabel(recentProject)}</em>
-                  </span>
-                  <strong>{recentProject.name}</strong>
-                  <span className="project-launchpad__primary-progress">
-                    <span aria-hidden="true"><i style={{ width: `${recentProgress}%` }} /></span>
-                    <b>
-                      {recentProject.total !== undefined
-                        ? `${recentResolved} / ${recentProject.total}`
-                        : "可继续"}
-                    </b>
-                  </span>
-                </span>
-                <span className="project-launchpad__primary-continue">
-                  继续<i aria-hidden="true">→</i>
-                </span>
-              </>
-            ) : (
-              <>
-                <strong>选择目标探索</strong>
-                <i aria-hidden="true">→</i>
-              </>
-            )}
-          </button>
-
-          <nav className="project-launchpad__secondary" aria-label="目标探索操作">
-            {recentProject ? (
-              <button type="button" onClick={onOpenLibrary}>全部目标探索</button>
-            ) : null}
-            <button type="button" onClick={onCreate}><span aria-hidden="true">＋</span>新建目标探索</button>
-          </nav>
+              <div className="project-launchpad__position" aria-live="polite">
+                <i aria-hidden="true" />
+                <span>{selectedIndex + 1} / {projects.length}</span>
+                <i aria-hidden="true" />
+              </div>
+            </>
+          ) : (
+            <div className="project-launchpad__empty-selector">
+              <span aria-hidden="true"><i /></span>
+              <strong>还没有可打开的目标探索</strong>
+              <small>新建目标探索，或重新关联已有目录。</small>
+            </div>
+          )}
 
           {actions.error ? (
             <button type="button" className="project-launchpad__error" onClick={actions.clearError}>
@@ -402,10 +580,6 @@ function ProjectLaunchpad({
           ) : null}
         </div>
 
-        <div className="project-launchpad__beacon" aria-hidden="true">
-          <span className="project-launchpad__orbit project-launchpad__orbit--outer"><i /></span>
-          <b><i /></b>
-        </div>
       </div>
 
     </section>
