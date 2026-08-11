@@ -31,9 +31,15 @@ export function consumeProjectWheel(
 ): { accumulator: number; steps: number } {
   const total = accumulator + delta;
   const rawSteps = Math.trunc(total / PROJECT_WHEEL_STEP_PX);
-  const steps = Math.max(-2, Math.min(2, rawSteps));
+  if (rawSteps === 0) {
+    return { accumulator: total, steps: 0 };
+  }
   return {
-    accumulator: total - steps * PROJECT_WHEEL_STEP_PX,
-    steps,
+    accumulator: total - rawSteps * PROJECT_WHEEL_STEP_PX,
+    steps: projectDialStep(rawSteps),
   };
+}
+
+export function projectDialStep(delta: number): -1 | 0 | 1 {
+  return delta > 0 ? 1 : delta < 0 ? -1 : 0;
 }

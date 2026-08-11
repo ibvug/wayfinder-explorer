@@ -2225,6 +2225,7 @@ button:focus-visible {
 }
 
 .project-launchpad__content {
+  --project-gear-turn: 0deg;
   --project-turn: 0deg;
   --project-counter-turn: 0deg;
   --project-inner-turn: 0deg;
@@ -4710,17 +4711,54 @@ button:focus-visible {
   height: calc(100% + 8px);
   border-radius: 50%;
   background: none;
-  opacity: 0.8;
+  opacity: 0.72;
   -webkit-mask: none;
   mask: none;
   pointer-events: none;
-  animation: launchpad-gear-awake 36s linear infinite paused;
-  transition: opacity 180ms ease;
+  transform: rotate(var(--project-tick-turn));
+  transform-origin: 50% 50%;
+  will-change: transform;
+  animation: none;
+  transition:
+    transform 620ms cubic-bezier(0.22, 0.72, 0.2, 1),
+    opacity 180ms ease;
+}
+
+.project-launchpad__gear-drive {
+  position: absolute;
+  z-index: 5;
+  inset: -4px;
+  border-radius: 50%;
+  background:
+    repeating-conic-gradient(
+      from -0.75deg,
+      rgba(225, 165, 61, 0.76) 0deg 1.5deg,
+      transparent 1.5deg 45deg
+    ),
+    repeating-conic-gradient(
+      from -0.65deg,
+      rgba(190, 218, 212, 0.78) 0deg 1.3deg,
+      transparent 1.3deg 11.25deg
+    );
+  opacity: 0.8;
+  -webkit-mask: radial-gradient(circle, transparent 0 85%, #000 85.7% 90.5%, transparent 91.2%);
+  mask: radial-gradient(circle, transparent 0 85%, #000 85.7% 90.5%, transparent 91.2%);
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px rgba(116, 181, 170, 0.36));
+  transform: rotate(var(--project-gear-turn));
+  transform-origin: 50% 50%;
+  will-change: transform;
+  transition:
+    transform 540ms cubic-bezier(0.22, 0.72, 0.2, 1),
+    opacity 180ms ease;
 }
 
 .project-launchpad__content:is(:hover, :focus-within) .project-launchpad__gear-ticks {
-  opacity: 0.96;
-  animation-play-state: running;
+  opacity: 0.78;
+}
+
+.project-launchpad__content:is(:hover, :focus-within) .project-launchpad__gear-drive {
+  opacity: 0.98;
 }
 
 .project-launchpad__axis {
@@ -4784,7 +4822,9 @@ button:focus-visible {
   z-index: 2;
   border: 1px solid rgba(113, 167, 159, 0.25);
   border-radius: 50%;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease;
+  transition:
+    transform 480ms cubic-bezier(0.37, 0, 0.63, 1),
+    border-color 180ms ease;
 }
 
 .project-launchpad__orbit--outer {

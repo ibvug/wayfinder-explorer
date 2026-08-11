@@ -42,6 +42,7 @@ import {
   consumeProjectWheel,
   openableProjects,
   projectAfterStep,
+  projectDialStep,
   wrapProjectIndex,
 } from "./project-selector.ts";
 import { useCampaign } from "./use-campaign.ts";
@@ -359,7 +360,7 @@ export function ProjectLaunchpad({
     setSelectedProjectId((currentId) => {
       return projectAfterStep(projects, currentId, delta)?.id;
     });
-    setDialStep((current) => current + delta);
+    setDialStep((current) => current + projectDialStep(delta));
     setMotionDirection(delta > 0 ? 1 : -1);
     setMotionRevision((current) => current + 1);
   }, [projects]);
@@ -449,9 +450,11 @@ export function ProjectLaunchpad({
   const slotOffsets = projects.length > 2 ? [-1, 0, 1] : projects.length === 2 ? [0, 1] : [0];
   const activeOptionId = selectedProject ? `project-launchpad-option-${selectedIndex}` : undefined;
   const dialStyle = {
-    "--project-turn": `${dialStep * 30}deg`,
-    "--project-counter-turn": `${dialStep * -17}deg`,
-    "--project-inner-turn": `${dialStep * 11}deg`,
+    "--project-tick-turn": `${dialStep * -0.75}deg`,
+    "--project-gear-turn": `${dialStep * 4.25}deg`,
+    "--project-turn": `${dialStep * 3}deg`,
+    "--project-counter-turn": `${dialStep * -1.75}deg`,
+    "--project-inner-turn": `${dialStep}deg`,
   } as React.CSSProperties;
 
   return (
@@ -480,6 +483,7 @@ export function ProjectLaunchpad({
       <div className="project-launchpad__content" style={dialStyle}>
         <div className="project-launchpad__beacon" aria-hidden="true">
           <img className="project-launchpad__gear-ticks" src={dialTicksUrl} alt="" />
+          <span className="project-launchpad__gear-drive" />
           <span className="project-launchpad__axis project-launchpad__axis--north"><i /></span>
           <span className="project-launchpad__axis project-launchpad__axis--south"><i /></span>
           <span className="project-launchpad__orbit project-launchpad__orbit--outer"><i /></span>

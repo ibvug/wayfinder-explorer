@@ -6,6 +6,7 @@ import {
   consumeProjectWheel,
   openableProjects,
   projectAfterStep,
+  projectDialStep,
   wrapProjectIndex,
 } from "../web/src/project-selector.ts";
 
@@ -36,9 +37,13 @@ test("project selector excludes missing projects and wraps in both directions", 
   assert.equal(wrapProjectIndex(-1, projects.length), 2);
 });
 
-test("project selector converts trackpad deltas into bounded reel steps", () => {
+test("project selector converts each trackpad burst into one precise reel step", () => {
   assert.deepEqual(consumeProjectWheel(0, 40), { accumulator: 40, steps: 0 });
   assert.deepEqual(consumeProjectWheel(40, 20), { accumulator: 8, steps: 1 });
   assert.deepEqual(consumeProjectWheel(0, -60), { accumulator: -8, steps: -1 });
-  assert.deepEqual(consumeProjectWheel(0, 500), { accumulator: 396, steps: 2 });
+  assert.deepEqual(consumeProjectWheel(0, 500), { accumulator: 32, steps: 1 });
+  assert.deepEqual(consumeProjectWheel(0, -500), { accumulator: -32, steps: -1 });
+  assert.equal(projectDialStep(3), 1);
+  assert.equal(projectDialStep(-3), -1);
+  assert.equal(projectDialStep(0), 0);
 });
