@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+import { fsyncDirectory } from "../durability.ts";
 import type { CampaignProjection, Location } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
 import type {
@@ -140,11 +141,26 @@ export class WritebackService {
     if (!location) {
       throw new WritebackError(404, `地图上不存在地点 ${input.locationId}。`);
     }
-    if (location.status !== "frontier" || location.sourceStatus !== "open") {
-      throw new WritebackConflictError("这个地点已经不是可确认的当前探索点。");
-    }
-    if (location.answerMarkdown || location.sourceRanges.answer) {
-      throw new WritebackConflictError("这个地点已经包含 Answer，Explorer 不会覆盖它。");
+    const sameAnswer = location.answerMarkdown?.trim() === input.proposal.answerMarkdown.trim();
+    const changeKind = location.sourceStatus === "resolved"
+      ? location.reviewState === "pending" && sameAnswer
+        ? "reaffirmation" as const
+        : "revision" as const
+      : "confirmation" as const;
+    if (changeKind === "confirmation") {
+      if (location.status !== "frontier" || location.sourceStatus !== "open") {
+        throw new WritebackConflictError("这个地点已经不是可确认的当前探索点。");
+      }
+      if (location.answerMarkdown || location.sourceRanges.answer) {
+        throw new WritebackConflictError("开放议题意外包含 Answer，Explorer 不会覆盖它。");
+      }
+    } else {
+      if (!location.answerMarkdown || !location.sourceRanges.answer) {
+        throw new WritebackConflictError("已确认节点缺少可保留的当前答案，不能安全修订。");
+      }
+      if (changeKind === "revision" && sameAnswer) {
+        throw new WritebackConflictError("答案内容没有变化；只有待复核节点可以原样确认仍然成立。");
+      }
     }
 
     const sourcePaths = [location.sourcePath, "map.md"];
@@ -162,7 +178,7 @@ export class WritebackService {
       ["map.md", mapAfter],
     ]);
     const after = await inspectCampaignWithOverrides(this.campaignRoot, overrides, this.#campaignId);
-    assertValidProjection(before, after, location.id);
+    assertValidProjection(before, after, location.id, changeKind);
 
     const createdAt = this.#now();
     const planId = `writeback-${randomUUID()}`;
@@ -174,6 +190,7 @@ export class WritebackService {
       id: planId,
       expeditionId: input.expeditionId,
       locationId: location.id,
+      changeKind,
       expectedSourceRevision: before.revision,
       resultingSourceRevision: after.revision,
       proposalHash: hashProposal(input.proposal),
@@ -379,6 +396,25 @@ export class WritebackConflictError extends WritebackError {
 }
 
 function patchIssue(location: Location, source: string, proposal: DecisionProposal): string {
+  if (location.sourceStatus === "resolved") {
+    const answerRange = location.sourceRanges.answer;
+    if (!answerRange || !location.answerMarkdown) {
+      throw new WritebackConflictError("无法定位需要保留的当前答案。");
+    }
+    if (location.reviewState === "pending" &&
+      location.answerMarkdown.trim() === proposal.answerMarkdown.trim()) {
+      return clearReviewState(source);
+    }
+    const newline = source.includes("\r\n") ? "\r\n" : "\n";
+    const nestedAnswer = normalizeNewlines(nestMarkdownUnderAnswer(proposal.answerMarkdown), newline);
+    const answerPatched = `${source.slice(0, answerRange.startOffset)}${nestedAnswer}${source.slice(answerRange.endOffset)}`;
+    return clearReviewState(appendAnswerHistory(
+      answerPatched,
+      normalizeNewlines(location.answerMarkdown, newline),
+      proposal.createdAt,
+      newline,
+    ));
+  }
   const range = location.sourceRanges.status;
   if (!range || range.path !== location.sourcePath) {
     throw new WritebackError(409, "无法定位 issue 的 Status 字段。");
@@ -396,6 +432,69 @@ function patchIssue(location: Location, source: string, proposal: DecisionPropos
       : `${newline}${newline}`;
   const nestedAnswer = nestMarkdownUnderAnswer(proposal.answerMarkdown);
   return `${statusPatched}${separator}## Answer${newline}${newline}${normalizeNewlines(nestedAnswer, newline)}${newline}`;
+}
+
+function appendAnswerHistory(
+  source: string,
+  previousAnswer: string,
+  replacedAt: string,
+  newline: string,
+): string {
+  const nestedHistory = nestMarkdownAtLevel(previousAnswer, 4);
+  const entry = `### Replaced ${replacedAt}${newline}${newline}${nestedHistory}`;
+  const heading = /^##\s+Answer history\s*$/gim;
+  const match = heading.exec(source);
+  if (!match) {
+    const separator = source.endsWith(`${newline}${newline}`)
+      ? ""
+      : source.endsWith(newline)
+        ? newline
+        : `${newline}${newline}`;
+    return `${source}${separator}## Answer history${newline}${newline}${entry}${newline}`;
+  }
+  const sectionStart = match.index + match[0].length;
+  const nextHeading = /^##\s+/gm;
+  nextHeading.lastIndex = sectionStart;
+  const next = nextHeading.exec(source);
+  const sectionEnd = next?.index ?? source.length;
+  const body = source.slice(sectionStart, sectionEnd);
+  const insertionOffset = sectionStart + body.trimEnd().length;
+  const insertion = body.trim() ? `${newline}${newline}${entry}` : `${newline}${newline}${entry}`;
+  return `${source.slice(0, insertionOffset)}${insertion}${source.slice(insertionOffset)}`;
+}
+
+function clearReviewState(source: string): string {
+  let next = source.replace(/^Review state:\s*pending\s*\n?/mi, "");
+  next = removeTopLevelSection(next, "Review question");
+  next = removeTopLevelSection(next, "Review reason");
+  return `${next.trimEnd()}\n`;
+}
+
+function removeTopLevelSection(source: string, heading: string): string {
+  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const start = lines.findIndex((line) =>
+    line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
+  if (start < 0) {
+    return source;
+  }
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+}
+
+function nestMarkdownAtLevel(markdown: string, minimumLevel: number): string {
+  return markdown.replaceAll("\r\n", "\n").split("\n").map((line) => {
+    const heading = /^( {0,3})(#{1,6})([ \t]+)/.exec(line);
+    if (!heading || heading[2].length >= minimumLevel) {
+      return line;
+    }
+    return `${heading[1]}${"#".repeat(minimumLevel)}${heading[3]}${line.slice(heading[0].length)}`;
+  }).join("\n");
 }
 
 /** Keep model-authored sections inside the canonical `## Answer` section. */
@@ -444,8 +543,16 @@ function patchMap(source: string, location: Location, proposal: DecisionProposal
   if (location.title.includes("]")) {
     throw new WritebackError(409, "地点标题不能安全写入 Decisions so far 链接。");
   }
-  if (source.includes(`](${location.sourcePath})`)) {
-    throw new WritebackConflictError("map.md 已经包含这个地点的决定记录。");
+  const existingReference = source.includes(`](${location.sourcePath})`);
+  const summary = decisionSummary(proposal.answerMarkdown);
+  const bullet = `- [${location.title}](${location.sourcePath}) — ${summary}`;
+  if (existingReference) {
+    const escapedPath = location.sourcePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const decisionLine = new RegExp(`^- \\[[^\\]]+\\]\\(${escapedPath}\\)(?:\\s+[—-]\\s+.*?)?$`, "m");
+    if (!decisionLine.test(source)) {
+      throw new WritebackConflictError("map.md 中的既有决定记录无法安全更新。");
+    }
+    return source.replace(decisionLine, bullet);
   }
   const heading = /^##\s+Decisions so far\s*$/gim;
   const match = heading.exec(source);
@@ -461,8 +568,6 @@ function patchMap(source: string, location: Location, proposal: DecisionProposal
   const trimmedBodyLength = body.trimEnd().length;
   const insertionOffset = sectionStart + trimmedBodyLength;
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
-  const summary = decisionSummary(proposal.answerMarkdown);
-  const bullet = `- [${location.title}](${location.sourcePath}) — ${summary}`;
   const insertion = trimmedBodyLength ? `${newline}${bullet}` : `${newline}${newline}${bullet}`;
   return `${source.slice(0, insertionOffset)}${insertion}${source.slice(insertionOffset)}`;
 }
@@ -485,6 +590,7 @@ function assertValidProjection(
   before: CampaignProjection,
   after: CampaignProjection,
   locationId: string,
+  changeKind: "confirmation" | "revision" | "reaffirmation",
 ): void {
   if (after.summary.blockingDiagnostics > 0) {
     throw new WritebackError(409, "候选写回无法通过 Wayfinder 结构校验。");
@@ -495,6 +601,23 @@ function assertValidProjection(
   const target = after.locations.find(({ id }) => id === locationId);
   if (target?.sourceStatus !== "resolved" || target.status !== "resolved" || !target.answerMarkdown) {
     throw new WritebackError(409, "候选写回没有把目标地点投影为已确认营地。");
+  }
+  const previousTarget = before.locations.find(({ id }) => id === locationId);
+  if (
+    changeKind === "revision" &&
+    (!previousTarget?.answerMarkdown || target.answerMarkdown === previousTarget.answerMarkdown ||
+      target.answerHistory.length !== previousTarget.answerHistory.length + 1)
+  ) {
+    throw new WritebackError(409, "候选修订没有保留旧答案历史并建立新的当前答案。");
+  }
+  if (
+    changeKind === "reaffirmation" &&
+    (!previousTarget?.answerMarkdown ||
+      target.answerMarkdown !== previousTarget.answerMarkdown ||
+      target.answerHistory.length !== previousTarget.answerHistory.length ||
+      target.reviewState !== "current")
+  ) {
+    throw new WritebackError(409, "候选复核没有保留原答案并清除待复核状态。");
   }
   for (const location of before.locations) {
     const candidate = after.locations.find(({ id }) => id === location.id);
@@ -645,15 +768,6 @@ async function writeAtomicReplacement(
   await unlink(temporaryPath).catch(ignoreMissing);
   await writeDurableFile(temporaryPath, bytes, mode, true);
   await rename(temporaryPath, targetPath);
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 function parseJournal(text: string, campaignId: string): RecoveryJournal {

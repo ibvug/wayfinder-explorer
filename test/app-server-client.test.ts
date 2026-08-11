@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -44,6 +46,25 @@ test("initializes once and dispatches interleaved app-server responses and notif
       "notification:turn/completed",
     ],
   );
+});
+
+test("starts an app-server exposed through a Windows command shim", {
+  skip: process.platform !== "win32",
+}, async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "wayfinder codex shim-"));
+  const shim = path.join(directory, "fake-codex.cmd");
+  await writeFile(shim, `@echo off\r\n"${process.execPath}" "${FAKE_SERVER}" normal\r\n`, "utf8");
+  context.after(() => rm(directory, { force: true, recursive: true }));
+
+  const client = new CodexAppServerClient({
+    command: shim,
+    args: [],
+    requestTimeoutMs: 2_000,
+  });
+  context.after(() => client.close());
+
+  const initialized = await client.start();
+  assert.equal(initialized.userAgent, "fake-codex/1");
 });
 
 test("treats malformed stdout as a protocol failure and closes the transport", async (context) => {

@@ -15,11 +15,13 @@ import {
   ExpeditionManager,
   type CodexTransport,
 } from "../src/expedition/manager.ts";
+import { RechartService } from "../src/charting/rechart-service.ts";
+import { JourneyStore } from "../src/expedition/journey-store.ts";
 import { overlayPathFor } from "../src/overlay.ts";
 import { CampaignStore } from "../src/service/campaign-store.ts";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
-const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "../../.scratch/personal-brain-v1");
+const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "fixtures/personal-brain-v1");
 
 test("persists a Codex thread binding and resumes the same Expedition after restart", async (context) => {
   const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-expedition-data-"));
@@ -51,6 +53,11 @@ test("persists a Codex thread binding and resumes the same Expedition after rest
   assert.equal(beforeRestart.threadId, "thread-fake-1");
   assert.deepEqual(beforeRestart.messages.map(({ role }) => role), ["guide"]);
   assert.match(beforeRestart.messages[0].text, /最小验收场景/);
+  const developerInstructions = readString(codexWorld.threadStartParams[0], "developerInstructions");
+  assert.match(developerInstructions, /otherOpenTickets/);
+  assert.match(developerInstructions, /explicit decision boundaries/);
+  assert.match(developerInstructions, /"id": "09"/);
+  assert.match(developerInstructions, /最小记忆单元必须包含哪些字段与不变量/);
 
   const overlay = JSON.parse(await readFile(overlayPathFor(firstStore.getSnapshot().campaign.id, dataRoot), "utf8"));
   assert.equal(overlay.expeditionBindings[started.id], "thread-fake-1");
@@ -212,10 +219,131 @@ test("loads the original Codex thread before continuing a draft after restart", 
   assert.equal(thirdManager.getView(started.id)?.threadId, originalThreadId);
 });
 
+test("only the claimant ends an exploration and the unfinished session survives archival", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-ended-expedition-data-"));
+  const campaignRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-ended-expedition-campaign-"));
+  await cp(PERSONAL_BRAIN_FIXTURE, campaignRoot, { recursive: true });
+  context.after(() => Promise.all([
+    rm(dataRoot, { recursive: true, force: true }),
+    rm(campaignRoot, { recursive: true, force: true }),
+  ]));
+  const store = await CampaignStore.open({ campaignRoot, dataRoot, watch: false });
+  const manager = await ExpeditionManager.open({
+    store,
+    client: new FakeCodexTransport(new FakeCodexWorld()),
+    grillingSkillPath: "/definitely/missing/grilling/SKILL.md",
+  });
+  context.after(async () => {
+    await manager.close();
+    await store.close();
+  });
+
+  const started = await manager.startExpedition("08");
+  await waitFor(() => manager.getView(started.id)?.state === "awaiting_player");
+  await manager.sendMessage(started.id, "这个分支不再属于本次目标探索，但保留已经讨论的内容。");
+  await waitFor(() => manager.getView(started.id)?.state === "awaiting_player");
+  const messageCount = manager.getView(started.id)!.messages.length;
+  const ending = await manager.endExpedition(started.id);
+  assert.equal(ending.state, "ending");
+  assert.equal(ending.messages.length, messageCount);
+
+  const before = store.getSnapshot().campaign;
+  const dependent = before.locations.find(({ id }) => id === "09")!;
+  const indirect = before.locations.find(({ id }) => id === "11")!;
+  const recharts = new RechartService({
+    campaignRoot,
+    campaignId: before.id,
+    dataRoot,
+  });
+  await recharts.apply({
+    id: "rechart-proposal-end-08",
+    sourceRevision: before.revision,
+    sourceTurnId: "turn-map-end-08",
+    confirmedLocationId: "08",
+    triggerKind: "exploration_ended",
+    createdAt: "2026-08-07T00:00:00.000Z",
+    issueChanges: [
+      { kind: "end", issueId: "08", reason: "The claimant ended this exploration." },
+      {
+        kind: "update",
+        issueId: "09",
+        title: dependent.title,
+        type: dependent.type === "unknown" ? "grilling" : dependent.type,
+        question: dependent.question,
+        blockedBy: [],
+        reason: "The ended exploration is no longer a prerequisite.",
+      },
+      {
+        kind: "update",
+        issueId: "11",
+        title: indirect.title,
+        type: indirect.type === "unknown" ? "grilling" : indirect.type,
+        question: indirect.question,
+        blockedBy: indirect.blockers.filter((id) => id !== "08"),
+        reason: "Removed the ended exploration from this issue's prerequisites.",
+      },
+    ],
+    fog: before.fog.map(({ title }) => title),
+    outOfScope: before.outOfScope,
+    reviewConflicts: [],
+    explorationUpdates: [],
+    summary: "Archived the ended exploration and reconciled its dependent.",
+    evidenceRefs: [`campaign:${before.revision}`, "location:08:exploration-ended"],
+  }, new Set());
+  await store.refresh();
+  await waitFor(() => manager.getView(started.id)?.state === "abandoned");
+
+  const archived = manager.getView(started.id)!;
+  assert.equal(archived.messages.length, messageCount);
+  assert.match(archived.error ?? "", /未完成历史/);
+  assert.match(
+    await readFile(path.join(campaignRoot, "history/unfinished/08-lock-v1-acceptance-boundary.md"), "utf8"),
+    /## Exploration ended/,
+  );
+  assert.equal(store.getSnapshot().campaign.locations.some(({ id }) => id === "08"), false);
+  assert.equal(store.getSnapshot().campaign.mapNodes.some(({ id }) => id === "08"), false);
+});
+
+test("Map Agent context for a busy exploration survives a process restart", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-coordination-data-"));
+  context.after(() => rm(dataRoot, { recursive: true, force: true }));
+  const campaignStore = await CampaignStore.open({
+    campaignRoot: PERSONAL_BRAIN_FIXTURE,
+    dataRoot,
+    watch: false,
+  });
+  context.after(() => campaignStore.close());
+  const campaign = campaignStore.getSnapshot().campaign;
+  const first = await JourneyStore.open(campaign, { dataRoot });
+  await first.start("expedition-coordination", "08", "thread-coordination");
+  await first.changeState("expedition-coordination", "exploring", {
+    activeTurnId: "turn-busy",
+  });
+  await first.queueCoordination("expedition-coordination", "batch-1:0:08", {
+    locationId: "08",
+    contextMarkdown: "A confirmed answer changed the relevant premise.",
+    reason: "Keep the same exploration aligned with the current map.",
+  });
+  await first.close();
+
+  const reopened = await JourneyStore.open(campaign, { dataRoot });
+  assert.deepEqual(
+    reopened.get("expedition-coordination")?.pendingCoordinations.map(({ id }) => id),
+    ["batch-1:0:08"],
+  );
+  await reopened.markCoordinationsDelivered("expedition-coordination", ["batch-1:0:08"]);
+  await reopened.close();
+
+  const final = await JourneyStore.open(campaign, { dataRoot });
+  assert.deepEqual(final.get("expedition-coordination")?.pendingCoordinations, []);
+  await final.close();
+});
+
 class FakeCodexWorld {
   threadStarts = 0;
   turnStarts = 0;
   proposalTurns = 0;
+  threadStartParams: unknown[] = [];
   threads = new Map<string, FakeThread>();
 }
 
@@ -263,6 +391,7 @@ class FakeCodexTransport implements CodexTransport {
 
   async request<Result>(method: string, params?: unknown): Promise<Result> {
     if (method === "thread/start") {
+      this.#world.threadStartParams.push(structuredClone(params));
       const id = `thread-fake-${++this.#world.threadStarts}`;
       const thread: FakeThread = { id, turns: [] };
       this.#world.threads.set(id, thread);

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
 import type { CampaignProjection } from "../../src/model.ts";
 import type { Selection } from "./app-types.ts";
+import { useModalDialog } from "./use-modal-dialog.ts";
 
 interface JourneyLogProps {
   campaign: CampaignProjection;
@@ -11,40 +12,32 @@ interface JourneyLogProps {
 
 export function JourneyLog({ campaign, onClose, onSelect }: JourneyLogProps) {
   const closeButton = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    closeButton.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  const dialog = useModalDialog<HTMLElement>({ onClose, initialFocus: closeButton });
 
   const frontier = campaign.locations.filter(({ status }) => status === "frontier");
 
   return (
     <div className="log-backdrop" onMouseDown={onClose}>
       <section
+        ref={dialog}
         className="journey-log"
         role="dialog"
         aria-modal="true"
         aria-labelledby="journey-log-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="journey-log__header">
           <div>
             <p className="ui-eyebrow">TRAIL ARCHIVE</p>
-            <h2 id="journey-log-title">旅程日志</h2>
+            <h2 id="journey-log-title">探索总览</h2>
           </div>
           <button
             ref={closeButton}
             type="button"
             className="icon-button"
             onClick={onClose}
-            aria-label="关闭旅程日志"
+            aria-label="关闭探索总览"
           >
             <span aria-hidden="true">×</span>
           </button>

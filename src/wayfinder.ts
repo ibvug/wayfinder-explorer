@@ -4,12 +4,15 @@ import path from "node:path";
 
 import type {
   CampaignProjection,
+  AnswerHistoryEntry,
+  DeterminedRoute,
   Diagnostic,
   FogArea,
   Location,
   LocationSourceRanges,
   LocationStatus,
   LocationType,
+  MapNode,
   Route,
   SourceRange,
   SourceStatus,
@@ -63,6 +66,8 @@ interface ParsedDecision {
 interface ParsedMap {
   title: string;
   destination: string;
+  startingState: string;
+  evidenceScope: string[];
   decisions: ParsedDecision[];
   fog: FogArea[];
   outOfScope: string[];
@@ -77,6 +82,12 @@ interface ParsedIssue {
   blockers: string[];
   question: string;
   answerMarkdown?: string;
+  answerHistory: AnswerHistoryEntry[];
+  reviewState: "current" | "pending";
+  reviewQuestion?: string;
+  reviewReason?: string;
+  rechartState: "current" | "pending_delete";
+  pendingDeletionReason?: string;
   sourceRanges: LocationSourceRanges;
 }
 
@@ -144,6 +155,49 @@ export async function inspectCampaignWithOverrides(
   }, campaignId);
 }
 
+/**
+ * Project a prospective canonical file set, including safe issue creation or
+ * removal. Rechart uses this to validate a whole proposal before touching disk.
+ */
+export async function inspectCampaignWithChanges(
+  campaignRoot: string,
+  changes: ReadonlyMap<string, Buffer | string | null>,
+  campaignId?: string,
+): Promise<CampaignProjection> {
+  const root = path.resolve(campaignRoot);
+  const files = await readCampaignFiles(root);
+  const byPath = new Map(files.all.map((file) => [file.relativePath, file]));
+  for (const [rawPath, value] of changes) {
+    const relativePath = toPosixPath(path.normalize(rawPath));
+    if (relativePath !== "map.md" && !/^issues\/\d+-[a-z0-9-]+\.md$/.test(relativePath)) {
+      throw new Error(`Unsafe Campaign change ${rawPath}.`);
+    }
+    if (value === null) {
+      byPath.delete(relativePath);
+      continue;
+    }
+    const absolutePath = path.resolve(root, relativePath);
+    const relative = path.relative(root, absolutePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Campaign change escapes root: ${rawPath}.`);
+    }
+    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+    byPath.set(relativePath, {
+      absolutePath,
+      relativePath,
+      bytes,
+      text: bytes.toString("utf8"),
+    });
+  }
+  const mapFile = byPath.get("map.md");
+  const issues = [...byPath.values()]
+    .filter(({ relativePath }) => relativePath.startsWith("issues/"))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath, "en"));
+  const all = [...(mapFile ? [mapFile] : []), ...issues]
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath, "en"));
+  return projectCampaign(root, { map: mapFile, issues, all }, campaignId);
+}
+
 function projectCampaign(
   root: string,
   files: CampaignFiles,
@@ -186,6 +240,13 @@ function projectCampaign(
   const resolved = locations.filter((location) => location.status === "resolved").length;
   const frontier = locations.filter((location) => location.status === "frontier").length;
   const blocked = locations.filter((location) => location.status === "blocked").length;
+  const arrived = locations.length > 0 &&
+    resolved === locations.length &&
+    locations.every(({ reviewState }) => reviewState === "current") &&
+    parsedMap.fog.length === 0 &&
+    diagnostics.every(({ blocking }) => !blocking);
+  const mapNodes = projectMapNodes(parsedMap, locations, arrived);
+  const determinedRoutes = projectDeterminedRoutes(locations, arrived);
 
   return {
     id: registeredCampaignId ?? campaignIdForRoot(root),
@@ -193,9 +254,13 @@ function projectCampaign(
     revision,
     title: parsedMap.title,
     destination: parsedMap.destination,
+    startingState: parsedMap.startingState,
+    evidenceScope: parsedMap.evidenceScope,
     outOfScope: parsedMap.outOfScope,
     locations,
     routes,
+    mapNodes,
+    determinedRoutes,
     trail,
     fog: parsedMap.fog,
     diagnostics,
@@ -287,7 +352,15 @@ function emptyMapWithDiagnostic(diagnostics: Diagnostic[]): ParsedMap {
     blocking: true,
     message: "Campaign root does not contain map.md.",
   });
-  return { title: "Untitled campaign", destination: "", decisions: [], fog: [], outOfScope: [] };
+  return {
+    title: "Untitled campaign",
+    destination: "",
+    startingState: "",
+    evidenceScope: [],
+    decisions: [],
+    fog: [],
+    outOfScope: [],
+  };
 }
 
 function parseMap(file: SourceFile, diagnostics: Diagnostic[]): ParsedMap {
@@ -314,6 +387,11 @@ function parseMap(file: SourceFile, diagnostics: Diagnostic[]): ParsedMap {
     });
   }
 
+  const startingState = document.sections.get("starting state")?.body ?? "";
+  const evidenceScope = parseBulletLines(document.sections.get("evidence scope")).map(
+    ({ text }) => text,
+  );
+
   const decisions = parseDecisionLines(document.sections.get("decisions so far"));
   const fog = parseBulletLines(document.sections.get("not yet specified")).map(
     ({ text, source }, index) => ({
@@ -329,6 +407,8 @@ function parseMap(file: SourceFile, diagnostics: Diagnostic[]): ParsedMap {
   return {
     title: document.title ?? "Untitled campaign",
     destination,
+    startingState,
+    evidenceScope,
     decisions,
     fog,
     outOfScope,
@@ -416,6 +496,13 @@ function parseIssue(file: SourceFile, diagnostics: Diagnostic[]): ParsedIssue {
   }
 
   const answerSection = document.sections.get("answer");
+  const answerHistorySection = document.sections.get("answer history");
+  const reviewQuestionSection = document.sections.get("review question");
+  const reviewReasonSection = document.sections.get("review reason");
+  const pendingDeletionSection = document.sections.get("pending deletion");
+  const reviewState = metadata.get("review state")?.value.toLowerCase() === "pending"
+    ? "pending" as const
+    : "current" as const;
   return {
     id,
     sourcePath: file.relativePath,
@@ -425,6 +512,14 @@ function parseIssue(file: SourceFile, diagnostics: Diagnostic[]): ParsedIssue {
     blockers,
     question,
     answerMarkdown: answerSection?.body || undefined,
+    answerHistory: parseAnswerHistory(answerHistorySection),
+    reviewState,
+    reviewQuestion: reviewQuestionSection?.body || undefined,
+    reviewReason: reviewReasonSection?.body || undefined,
+    rechartState: metadata.get("rechart state")?.value.toLowerCase() === "pending-delete"
+      ? "pending_delete"
+      : "current",
+    pendingDeletionReason: pendingDeletionSection?.body || undefined,
     sourceRanges: {
       document: wholeDocument,
       title: document.titleRange,
@@ -433,8 +528,32 @@ function parseIssue(file: SourceFile, diagnostics: Diagnostic[]): ParsedIssue {
       blockers: metadata.get("blocked by")?.range,
       question: questionSection?.range,
       answer: answerSection?.range,
+      answerHistory: answerHistorySection?.range,
     },
   };
+}
+
+function parseAnswerHistory(section?: ParsedSection): AnswerHistoryEntry[] {
+  if (!section) {
+    return [];
+  }
+  const starts = section.lines.flatMap((line, index) => {
+    const match = /^###\s+(.+?)\s*$/.exec(line.text);
+    return match ? [{ index, label: match[1] }] : [];
+  });
+  return starts.flatMap((start, index) => {
+    const end = starts[index + 1]?.index ?? section.lines.length;
+    const contentLines = trimBlankLines(section.lines.slice(start.index + 1, end));
+    const answerMarkdown = sliceLinesFromSection(contentLines);
+    return answerMarkdown ? [{ label: start.label, answerMarkdown }] : [];
+  });
+}
+
+function sliceLinesFromSection(lines: SourceLine[]): string {
+  if (!lines.length) {
+    return "";
+  }
+  return lines.map(({ text }) => text).join("\n").trim();
 }
 
 function parseDocument(file: SourceFile): ParsedDocument {
@@ -719,6 +838,83 @@ function projectStatus(
     (blocker) => issuesById.get(blocker)?.sourceStatus === "resolved",
   );
   return allBlockersResolved ? "frontier" : "blocked";
+}
+
+function projectMapNodes(
+  map: ParsedMap,
+  locations: Location[],
+  arrived: boolean,
+): MapNode[] {
+  if (!map.destination) {
+    return [];
+  }
+  const decisions: MapNode[] = locations
+    .filter(({ sourceStatus }) => sourceStatus === "resolved")
+    .map((location) => ({
+      id: location.id,
+      kind: "decision",
+      state: location.reviewState === "pending" ? "review_pending" : "current",
+      title: location.title,
+      locationId: location.id,
+      answerMarkdown: location.answerMarkdown,
+      answerHistory: location.answerHistory,
+    }));
+  return [
+    {
+      id: "start",
+      kind: "start",
+      state: "current",
+      title: map.startingState || "起点",
+      answerMarkdown: map.startingState || undefined,
+    },
+    ...decisions,
+    {
+      id: "destination",
+      kind: "destination",
+      state: arrived ? "arrived" : "open",
+      title: map.destination,
+    },
+  ];
+}
+
+function projectDeterminedRoutes(
+  locations: Location[],
+  arrived: boolean,
+): DeterminedRoute[] {
+  const resolved = locations.filter(({ sourceStatus }) => sourceStatus === "resolved");
+  const resolvedIds = new Set(resolved.map(({ id }) => id));
+  const currentResolved = resolved.filter(({ reviewState }) => reviewState === "current");
+  const currentIds = new Set(currentResolved.map(({ id }) => id));
+  const routes: DeterminedRoute[] = [];
+  for (const location of currentResolved) {
+    const resolvedBlockers = location.blockers.filter((blocker) => resolvedIds.has(blocker));
+    const currentBlockers = resolvedBlockers.filter((blocker) => currentIds.has(blocker));
+    if (resolvedBlockers.length !== currentBlockers.length) {
+      continue;
+    }
+    if (!currentBlockers.length) {
+      routes.push({ from: "start", to: location.id });
+    } else {
+      routes.push(...currentBlockers.map((from) => ({ from, to: location.id })));
+    }
+  }
+  if (arrived) {
+    const outgoing = new Set(routes.map(({ from }) => from));
+    for (const location of currentResolved) {
+      if (!outgoing.has(location.id)) {
+        routes.push({ from: location.id, to: "destination" });
+      }
+    }
+  }
+  return routes.sort((left, right) => {
+    const fromOrder = compareMapEndpointIds(left.from, right.from);
+    return fromOrder || compareMapEndpointIds(left.to, right.to);
+  });
+}
+
+function compareMapEndpointIds(left: string, right: string): number {
+  const rank = (value: string) => value === "start" ? -1 : value === "destination" ? 1 : 0;
+  return rank(left) - rank(right) || compareLocationIds(left, right);
 }
 
 function createRankResolver(

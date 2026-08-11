@@ -21,7 +21,7 @@ import type {
 
 interface RegistryDocument {
   schemaVersion: 1;
-  activeProjectId: string;
+  activeProjectId: string | null;
   projects: CampaignProjectRecord[];
 }
 
@@ -29,6 +29,10 @@ export interface CampaignRegistryOptions {
   dataRoot?: string;
   initialCampaignRoot?: string;
   now?: () => Date;
+}
+
+export interface RemoveCampaignProjectOptions {
+  moveRootToTrash?: (root: string) => Promise<void>;
 }
 
 /** Persistent project library. Campaign identity survives path changes. */
@@ -53,6 +57,7 @@ export class CampaignRegistry {
     const registryPath = path.join(dataRoot, "registry.json");
     const now = options.now ?? (() => new Date());
     const document = await readRegistry(registryPath);
+    const startedWithoutProjects = document.projects.length === 0;
     const registry = new CampaignRegistry(
       registryPath,
       document,
@@ -60,24 +65,31 @@ export class CampaignRegistry {
     );
     let initialRecord: CampaignProjectRecord | undefined;
     if (options.initialCampaignRoot) {
-      initialRecord = await registry.addExisting(options.initialCampaignRoot, {
-        preserveLegacyIdentity: true,
-      });
+      try {
+        initialRecord = await registry.addExisting(options.initialCampaignRoot, {
+          preserveLegacyIdentity: true,
+        });
+      } catch (error) {
+        if (!(error instanceof CampaignRegistryError) || error.statusCode !== 404) {
+          throw error;
+        }
+      }
     }
 
     const activeRecord = registry.getActiveRecord();
     const activeIsAvailable = activeRecord && (await projectView(activeRecord)).status !== "missing";
-    if (!activeIsAvailable) {
-      const fallback = initialRecord ?? await firstAvailableRecord(document.projects);
-      if (fallback) {
-        await registry.activate(fallback.id);
-      }
+    if (activeRecord && !activeIsAvailable) {
+      await registry.deactivate();
+    } else if (!activeRecord && document.activeProjectId) {
+      await registry.deactivate();
+    } else if (!activeRecord && startedWithoutProjects && initialRecord) {
+      await registry.activate(initialRecord.id);
     }
     return registry;
   }
 
-  get activeProjectId(): string {
-    return this.#document.activeProjectId;
+  get activeProjectId(): string | undefined {
+    return this.#document.activeProjectId ?? undefined;
   }
 
   getRecord(id: string): CampaignProjectRecord | undefined {
@@ -86,7 +98,9 @@ export class CampaignRegistry {
   }
 
   getActiveRecord(): CampaignProjectRecord | undefined {
-    return this.getRecord(this.#document.activeProjectId);
+    return this.#document.activeProjectId
+      ? this.getRecord(this.#document.activeProjectId)
+      : undefined;
   }
 
   async getIndex(): Promise<CampaignProjectIndex> {
@@ -94,7 +108,7 @@ export class CampaignRegistry {
     projects.sort((left, right) =>
       right.lastOpenedAt.localeCompare(left.lastOpenedAt) || left.name.localeCompare(right.name));
     return {
-      activeProjectId: this.#document.activeProjectId,
+      activeProjectId: this.#document.activeProjectId ?? undefined,
       projects,
     };
   }
@@ -190,6 +204,62 @@ export class CampaignRegistry {
     return structuredClone(record);
   }
 
+  async deactivate(): Promise<void> {
+    if (this.#document.activeProjectId === null) {
+      return;
+    }
+    const previousActiveProjectId = this.#document.activeProjectId;
+    this.#document.activeProjectId = null;
+    try {
+      await this.#persist();
+    } catch (cause) {
+      this.#document.activeProjectId = previousActiveProjectId;
+      throw cause;
+    }
+  }
+
+  async remove(
+    id: string,
+    options: RemoveCampaignProjectOptions = {},
+  ): Promise<CampaignProjectRecord> {
+    const record = this.#recordOrThrow(id);
+    const shouldMoveRootToTrash = options.moveRootToTrash
+      ? await isDirectory(record.root)
+      : false;
+    const index = this.#document.projects.findIndex((candidate) => candidate.id === id);
+    const previousActiveProjectId = this.#document.activeProjectId;
+    this.#document.projects.splice(index, 1);
+    if (record.id === previousActiveProjectId) {
+      this.#document.activeProjectId = null;
+    }
+    try {
+      await this.#persist();
+    } catch (cause) {
+      this.#document.projects.splice(index, 0, record);
+      this.#document.activeProjectId = previousActiveProjectId;
+      throw cause;
+    }
+    if (options.moveRootToTrash && shouldMoveRootToTrash) {
+      try {
+        await options.moveRootToTrash(record.root);
+      } catch (cause) {
+        this.#document.projects.splice(index, 0, record);
+        this.#document.activeProjectId = previousActiveProjectId;
+        try {
+          await this.#persist();
+        } catch (rollbackCause) {
+          throw new CampaignRegistryError(
+            500,
+            "项目目录删除失败，项目库记录也未能自动恢复。",
+            new AggregateError([cause, rollbackCause]),
+          );
+        }
+        throw cause;
+      }
+    }
+    return structuredClone(record);
+  }
+
   #recordOrThrow(id: string): CampaignProjectRecord {
     const record = this.#document.projects.find((candidate) => candidate.id === id);
     if (!record) {
@@ -206,27 +276,27 @@ export class CampaignRegistry {
 export class CampaignRegistryError extends Error {
   readonly statusCode: number;
 
-  constructor(statusCode: number, message: string) {
-    super(message);
+  constructor(statusCode: number, message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "CampaignRegistryError";
     this.statusCode = statusCode;
+  }
+}
+
+async function isDirectory(root: string): Promise<boolean> {
+  try {
+    return (await stat(root)).isDirectory();
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 
 async function projectView(record: CampaignProjectRecord): Promise<CampaignProjectView> {
   const inspected = await inspectProjectRoot(record.root, record.id);
   return { ...structuredClone(record), ...inspected };
-}
-
-async function firstAvailableRecord(
-  records: CampaignProjectRecord[],
-): Promise<CampaignProjectRecord | undefined> {
-  for (const record of records) {
-    if ((await projectView(record)).status !== "missing") {
-      return record;
-    }
-  }
-  return undefined;
 }
 
 async function inspectProjectRoot(
@@ -326,7 +396,7 @@ async function readRegistry(registryPath: string): Promise<RegistryDocument> {
     text = await readFile(registryPath, "utf8");
   } catch (error) {
     if (isMissingFileError(error)) {
-      return { schemaVersion: 1, activeProjectId: "", projects: [] };
+      return { schemaVersion: 1, activeProjectId: null, projects: [] };
     }
     throw error;
   }
@@ -346,7 +416,7 @@ function isRegistryDocument(value: unknown): value is RegistryDocument {
   return (
     isRecord(value) &&
     value.schemaVersion === 1 &&
-    typeof value.activeProjectId === "string" &&
+    (value.activeProjectId === null || typeof value.activeProjectId === "string") &&
     Array.isArray(value.projects) &&
     value.projects.every((project) =>
       isRecord(project) &&

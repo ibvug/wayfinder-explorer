@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import type { ExpeditionView } from "../src/expedition/model.ts";
 import type { ChartingService } from "../src/charting/manager.ts";
 import type { ChartingView } from "../src/charting/model.ts";
 import { CampaignRegistry } from "../src/project/registry.ts";
+import { SystemProjectTrash } from "../src/project/trash.ts";
 import { CampaignStore } from "../src/service/campaign-store.ts";
 import { createExplorerApp } from "../src/service/http-server.ts";
 import type { CampaignSnapshot } from "../src/service/model.ts";
@@ -17,7 +18,7 @@ import type { CampaignSnapshot } from "../src/service/model.ts";
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PERSONAL_BRAIN_FIXTURE = path.resolve(
   TEST_DIRECTORY,
-  "../../.scratch/personal-brain-v1",
+  "fixtures/personal-brain-v1",
 );
 
 test("serves a token-bound same-origin bootstrap and protected campaign API", async (context) => {
@@ -135,6 +136,113 @@ test("serves a token-bound same-origin bootstrap and protected campaign API", as
   assert.equal(focused.statusCode, 200);
   assert.equal(focused.json().snapshot.overlay.playerFocusId, "09");
   assert.equal(focused.json().snapshot.campaign.summary.frontier, 1);
+});
+
+test("serves the project library without opening a Campaign context", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-library-data-"));
+  const assetsRoot = await createBrowserAssets();
+  const registry = await CampaignRegistry.open({ dataRoot });
+  const explorer = await createExplorerApp({
+    assetsRoot,
+    apiToken: "test-token",
+    publicOrigin: "http://127.0.0.1:43210",
+    projects: {
+      registry,
+      index: await registry.getIndex(),
+      open: async () => {
+        throw new Error("The library snapshot must not open a project.");
+      },
+    },
+  });
+  context.after(async () => {
+    await explorer.app.close();
+    await Promise.all([
+      rm(dataRoot, { recursive: true, force: true }),
+      rm(assetsRoot, { recursive: true, force: true }),
+    ]);
+  });
+
+  const headers = {
+    host: "127.0.0.1:43210",
+    origin: "http://127.0.0.1:43210",
+    "x-wayfinder-token": "test-token",
+  };
+  const response = await explorer.app.inject({
+    method: "GET",
+    url: "/api/campaign",
+    headers,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().mode, "library");
+  assert.equal(response.json().projects.activeProjectId, undefined);
+  assert.deepEqual(response.json().projects.projects, []);
+  assert.equal(response.json().campaign, undefined);
+  assert.equal(explorer.getStore(), undefined);
+  assert.equal(explorer.getExpeditions(), undefined);
+  assert.equal(explorer.getCharting(), undefined);
+});
+
+test("removes a missing project record without trying to trash its absent directory", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-missing-project-remove-"));
+  const assetsRoot = await createBrowserAssets();
+  const missingProjectRoot = path.join(dataRoot, "missing-project");
+  await mkdir(missingProjectRoot);
+  const registry = await CampaignRegistry.open({
+    dataRoot,
+    initialCampaignRoot: missingProjectRoot,
+  });
+  const missingProject = registry.getActiveRecord()!;
+  await registry.deactivate();
+  await rm(missingProjectRoot, { recursive: true });
+  const systemTrash = new SystemProjectTrash({
+    platform: "darwin",
+    homeDirectory: path.join(dataRoot, "home"),
+  });
+  let trashCalls = 0;
+  const explorer = await createExplorerApp({
+    assetsRoot,
+    apiToken: "test-token",
+    publicOrigin: "http://127.0.0.1:43210",
+    projects: {
+      registry,
+      index: await registry.getIndex(),
+      open: async () => {
+        throw new Error("A missing project must not be opened during removal.");
+      },
+      trash: {
+        moveToTrash: async (root) => {
+          trashCalls += 1;
+          await systemTrash.moveToTrash(root);
+        },
+      },
+    },
+  });
+  context.after(async () => {
+    await explorer.app.close();
+    await Promise.all([
+      rm(dataRoot, { recursive: true, force: true }),
+      rm(assetsRoot, { recursive: true, force: true }),
+    ]);
+  });
+  const headers = {
+    host: "127.0.0.1:43210",
+    origin: "http://127.0.0.1:43210",
+    "x-wayfinder-token": "test-token",
+  };
+
+  const removed = await explorer.app.inject({
+    method: "DELETE",
+    url: `/api/projects/${missingProject.id}`,
+    headers,
+    payload: { snapshotVersion: 1 },
+  });
+
+  assert.equal(removed.statusCode, 200);
+  assert.equal(removed.json().snapshot.mode, "library");
+  assert.deepEqual(removed.json().snapshot.projects.projects, []);
+  assert.equal(registry.getRecord(missingProject.id), undefined);
+  assert.equal(trashCalls, 0);
 });
 
 test("watches external Markdown edits without rearranging persisted locations", async (context) => {
@@ -334,6 +442,28 @@ test("exposes the empty-project Charting conversation, proposal, preview, and co
   assert.equal(answered.statusCode, 200);
   assert.equal(answered.json().charting.messages.at(-1).role, "player");
 
+  const destinationConfirmed = await explorer.app.inject({
+    method: "POST",
+    url: `/api/charting/${started.json().charting.id}/destination/confirm`,
+    headers,
+    payload: { snapshotVersion: 1, draftId: "destination-draft-stub" },
+  });
+  assert.equal(destinationConfirmed.statusCode, 200);
+  assert.equal(destinationConfirmed.json().charting.phase, "starting_state");
+
+  const startingPointConfirmed = await explorer.app.inject({
+    method: "POST",
+    url: `/api/charting/${started.json().charting.id}/starting-point/confirm`,
+    headers,
+    payload: {
+      snapshotVersion: 1,
+      draftId: "starting-point-draft-stub",
+      evidenceVersion: "sha256:evidence-stub",
+    },
+  });
+  assert.equal(startingPointConfirmed.statusCode, 200);
+  assert.equal(startingPointConfirmed.json().charting.phase, "ready_for_proposal");
+
   const proposed = await explorer.app.inject({
     method: "POST",
     url: `/api/charting/${started.json().charting.id}/proposal`,
@@ -369,12 +499,14 @@ test("exposes the empty-project Charting conversation, proposal, preview, and co
   assert.equal(confirmed.json().charting.state, "confirmed");
 });
 
-test("creates an empty project and switches back to the existing Campaign on one origin", async (context) => {
+test("deletes the active project into a no-project library, then allows deleting the last project", async (context) => {
   const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-project-switch-"));
   const assetsRoot = await createBrowserAssets();
+  const initialCampaignRoot = path.join(dataRoot, "initial-campaign");
+  await cp(PERSONAL_BRAIN_FIXTURE, initialCampaignRoot, { recursive: true });
   const registry = await CampaignRegistry.open({
     dataRoot,
-    initialCampaignRoot: PERSONAL_BRAIN_FIXTURE,
+    initialCampaignRoot,
   });
   const initialRecord = registry.getActiveRecord()!;
   const openContext = async (record: typeof initialRecord) => {
@@ -390,6 +522,7 @@ test("creates an empty project and switches back to the existing Campaign on one
     };
   };
   const initial = await openContext(initialRecord);
+  const trashedProjectRoots: string[] = [];
   const explorer = await createExplorerApp({
     store: initial.store,
     expeditions: initial.expeditions,
@@ -400,6 +533,12 @@ test("creates an empty project and switches back to the existing Campaign on one
       registry,
       index: await registry.getIndex(),
       open: openContext,
+      trash: {
+        moveToTrash: async (root) => {
+          trashedProjectRoots.push(root);
+          await rm(root, { recursive: true });
+        },
+      },
     },
   });
   context.after(async () => {
@@ -450,7 +589,66 @@ test("creates an empty project and switches back to the existing Campaign on one
   assert.equal(switched.statusCode, 200);
   assert.equal(switched.json().snapshot.projects.activeProjectId, initialRecord.id);
   assert.equal(switched.json().snapshot.campaign.title, "Personal Brain V1 决策地图");
-  assert.equal(explorer.getStore().getSnapshot().campaign.id, initialRecord.id);
+  assert.equal(explorer.getStore()!.getSnapshot().campaign.id, initialRecord.id);
+
+  const deactivated = await explorer.app.inject({
+    method: "POST",
+    url: "/api/projects/deactivate",
+    headers,
+    payload: { snapshotVersion: switched.json().snapshot.sequence },
+  });
+  assert.equal(deactivated.statusCode, 200);
+  assert.equal(deactivated.json().snapshot.mode, "library");
+  assert.equal(deactivated.json().snapshot.projects.activeProjectId, undefined);
+  assert.equal(deactivated.json().snapshot.projects.projects.length, 2);
+  assert.equal(registry.getRecord(initialRecord.id)?.id, initialRecord.id);
+  assert.deepEqual(trashedProjectRoots, []);
+  assert.equal(explorer.getStore(), undefined);
+
+  const reactivated = await explorer.app.inject({
+    method: "POST",
+    url: `/api/projects/${initialRecord.id}/activate`,
+    headers,
+    payload: { snapshotVersion: deactivated.json().snapshot.sequence },
+  });
+  assert.equal(reactivated.statusCode, 200);
+  assert.equal(reactivated.json().snapshot.mode, "campaign");
+  assert.equal(reactivated.json().snapshot.projects.activeProjectId, initialRecord.id);
+
+  const createdProjectId = created.json().snapshot.projects.activeProjectId as string;
+  const createdProjectRoot = path.join(chosenProjectsRoot, "从零开始的旅程");
+  const removed = await explorer.app.inject({
+    method: "DELETE",
+    url: `/api/projects/${initialRecord.id}`,
+    headers,
+    payload: { snapshotVersion: reactivated.json().snapshot.sequence },
+  });
+  assert.equal(removed.statusCode, 200);
+  assert.equal(removed.json().snapshot.mode, "library");
+  assert.equal(removed.json().snapshot.projects.projects.length, 1);
+  assert.equal(removed.json().snapshot.projects.activeProjectId, undefined);
+  assert.equal(removed.json().snapshot.campaign, undefined);
+  assert.equal(registry.getRecord(initialRecord.id), undefined);
+  assert.deepEqual(trashedProjectRoots, [initialCampaignRoot]);
+  await assert.rejects(stat(initialCampaignRoot), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT");
+  assert.equal((await stat(createdProjectRoot)).isDirectory(), true);
+  assert.equal(explorer.getStore(), undefined);
+
+  const lastProjectRemoval = await explorer.app.inject({
+    method: "DELETE",
+    url: `/api/projects/${createdProjectId}`,
+    headers,
+    payload: { snapshotVersion: removed.json().snapshot.sequence },
+  });
+  assert.equal(lastProjectRemoval.statusCode, 200);
+  assert.equal(lastProjectRemoval.json().snapshot.mode, "library");
+  assert.equal(lastProjectRemoval.json().snapshot.projects.activeProjectId, undefined);
+  assert.deepEqual(lastProjectRemoval.json().snapshot.projects.projects, []);
+  assert.deepEqual(trashedProjectRoots, [initialCampaignRoot, createdProjectRoot]);
+  assert.equal(registry.getRecord(createdProjectId), undefined);
+  await assert.rejects(stat(createdProjectRoot), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT");
 });
 
 async function createBrowserAssets(): Promise<string> {
@@ -488,8 +686,10 @@ class StubExpeditionService implements ExpeditionService {
       campaignId,
       locationId: "08",
       threadId: "thread-stub-08",
+      mode: "initial",
       state: "awaiting_player",
       messages: [],
+      pendingCoordinations: [],
       createdAt: "2026-08-02T00:00:00.000Z",
       updatedAt: "2026-08-02T00:00:00.000Z",
     };
@@ -553,6 +753,7 @@ class StubExpeditionService implements ExpeditionService {
       id: "writeback-stub",
       expeditionId: this.#view.id,
       locationId: "08",
+      changeKind: "confirmation",
       expectedSourceRevision: "sha256:stub-before",
       resultingSourceRevision: "sha256:stub-after",
       proposalHash: "sha256:stub",
@@ -578,6 +779,18 @@ class StubExpeditionService implements ExpeditionService {
     return structuredClone(this.#view);
   }
 
+  async endExpedition() {
+    this.#view.state = "ending";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async coordinateRechart() {}
+
+  async resolveApproval() {
+    return structuredClone(this.#view);
+  }
+
   async close() {}
 
   #publish() {
@@ -597,7 +810,16 @@ class StubChartingService implements ChartingService {
       campaignId,
       threadId: "thread-charting-stub",
       state: "awaiting_player",
+      phase: "destination",
+      destinationDraft: {
+        id: "destination-draft-stub",
+        content: "验证空项目建图。",
+        sourceTurnId: "turn-destination-stub",
+        createdAt: "2026-08-04T00:00:00.000Z",
+      },
       messages: [],
+      rechartQueue: [],
+      rechartChanges: [],
       createdAt: "2026-08-04T00:00:00.000Z",
       updatedAt: "2026-08-04T00:00:00.000Z",
     };
@@ -635,12 +857,47 @@ class StubChartingService implements ChartingService {
     return structuredClone(this.#view);
   }
 
+  async confirmDestination(_chartingId: string, draftId: string) {
+    this.#view.confirmedDestination = {
+      draftId,
+      content: this.#view.destinationDraft!.content,
+      confirmedAt: "2026-08-04T00:00:01.500Z",
+    };
+    this.#view.phase = "starting_state";
+    this.#view.startingPointDraft = {
+      id: "starting-point-draft-stub",
+      summary: "当前项目目录为空。",
+      evidenceScope: ["当前项目目录"],
+      evidencePaths: [],
+      evidenceRefs: ["turn:starting-point-stub"],
+      evidenceVersion: "sha256:evidence-stub",
+      sourceTurnId: "turn-starting-point-stub",
+      createdAt: "2026-08-04T00:00:01.500Z",
+    };
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async confirmStartingPoint(_chartingId: string, draftId: string, evidenceVersion: string) {
+    this.#view.confirmedStartingPoint = {
+      ...this.#view.startingPointDraft!,
+      draftId,
+      evidenceVersion,
+      confirmedAt: "2026-08-04T00:00:01.750Z",
+    };
+    this.#view.phase = "ready_for_proposal";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
   async formMapProposal() {
     this.#view.state = "returned";
     this.#view.proposal = {
       id: "map-proposal-stub",
       title: "首张地图",
       destination: "验证空项目建图。",
+      startingState: "当前项目目录为空。",
+      evidenceScope: ["当前项目目录"],
       notes: [],
       tickets: [
         { key: "first", title: "第一个入口", type: "grilling", question: "第一问？", blockedBy: [] },
@@ -688,6 +945,32 @@ class StubChartingService implements ChartingService {
     this.#view.state = "confirmed";
     this.#view.creationPlan = undefined;
     this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async rechartAfterConfirmation() {
+    this.#view.state = "confirmed";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async rechartAfterExplorationEnd() {
+    this.#view.state = "confirmed";
+    this.#publish();
+    return structuredClone(this.#view);
+  }
+
+  async retryRechart() {
+    return structuredClone(this.#view);
+  }
+
+  async restoreRechartChange() {
+    return structuredClone(this.#view);
+  }
+
+  setRechartConsumer() {}
+
+  async resolveApproval() {
     return structuredClone(this.#view);
   }
 

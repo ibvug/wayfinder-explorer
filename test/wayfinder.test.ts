@@ -15,7 +15,7 @@ import {
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PERSONAL_BRAIN_FIXTURE = path.resolve(
   TEST_DIRECTORY,
-  "../../.scratch/personal-brain-v1",
+  "fixtures/personal-brain-v1",
 );
 
 test("projects the Personal Brain fixture into the approved map state", async () => {
@@ -323,6 +323,34 @@ test("regenerates a malformed replaceable overlay", async (context) => {
   assert.equal(recovered.recovered, true);
   assert.equal(recovered.overlay.playerFocusId, "08");
   assert.equal(recovered.overlay.layout.locations["08"].region, "frontier");
+});
+
+test("keeps a review-pending answer in the same node while removing its determined routes", async (context) => {
+  const root = await createCampaign({
+    decisions: [
+      { id: "01", slug: "premise", title: "Premise" },
+      { id: "02", slug: "dependent", title: "Dependent" },
+    ],
+    issues: [
+      issue("01", "premise", "Premise", "resolved"),
+      `${issue("02", "dependent", "Dependent", "resolved", ["01"])
+        .replace("Status: resolved", "Status: resolved\nReview state: pending").trimEnd()}\n\n` +
+        "## Review question\n\nDoes the answer still hold?\n\n" +
+        "## Review reason\n\nIts premise changed.\n",
+    ],
+  });
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const mapPath = path.join(root, "map.md");
+  await writeFile(mapPath, (await readFile(mapPath, "utf8")).replace("- Unknown terrain", ""));
+
+  const campaign = await inspectCampaign(root);
+  assert.equal(location(campaign, "02").reviewState, "pending");
+  assert.equal(location(campaign, "02").reviewQuestion, "Does the answer still hold?");
+  assert.deepEqual(
+    campaign.mapNodes.map(({ id, state }) => [id, state]),
+    [["start", "current"], ["01", "current"], ["02", "review_pending"], ["destination", "open"]],
+  );
+  assert.deepEqual(campaign.determinedRoutes, [{ from: "start", to: "01" }]);
 });
 
 function location(

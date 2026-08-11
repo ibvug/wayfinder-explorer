@@ -30,6 +30,11 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
       ),
     [overlay.layout.locations, bounds.minX, bounds.minY],
   );
+  const start = toCanvasPoint(
+    overlay.layout.start,
+    bounds.minX,
+    bounds.minY,
+  );
   const destination = toCanvasPoint(
     overlay.layout.destination,
     bounds.minX,
@@ -43,7 +48,9 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
       return;
     }
     const target =
-      selection.kind === "location"
+      selection.kind === "start"
+        ? start
+      : selection.kind === "location"
         ? points[selection.id]
         : selection.kind === "destination"
           ? destination
@@ -60,42 +67,35 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selection, points, destination.canvasX, destination.canvasY, fog.canvasX, fog.canvasY]);
+  }, [selection, points, start.canvasX, start.canvasY, destination.canvasX, destination.canvasY, fog.canvasX, fog.canvasY]);
 
-  const trailPairs = campaign.trail.slice(1).flatMap((stop, index) => {
-    const from = points[campaign.trail[index].locationId];
-    const to = points[stop.locationId];
-    return from && to ? [{ from, to, key: `trail-${stop.locationId}` }] : [];
-  });
-  const trailIds = new Set(campaign.trail.map(({ locationId }) => locationId));
-  const lastTrail = campaign.trail.at(-1);
-  const frontierBridges = lastTrail
-    ? campaign.locations.flatMap((location) => {
-        const from = points[lastTrail.locationId];
-        const to = points[location.id];
-        return location.status === "frontier" && !location.blockers.length && !trailIds.has(location.id) && from && to
-          ? [{ from, to, key: `bridge-${location.id}` }]
-          : [];
-      })
-    : [];
-  const outgoing = new Set(campaign.routes.map(({ from }) => from));
-  const destinationRoutes = campaign.locations.flatMap((location) => {
-    const from = points[location.id];
-    return !outgoing.has(location.id) && from
-      ? [{ from, to: destination, key: `destination-${location.id}` }]
-      : [];
+  const decisionNodes = campaign.mapNodes.filter(({ kind }) => kind === "decision");
+  const destinationNode = campaign.mapNodes.find(({ kind }) => kind === "destination");
+  const issues = campaign.locations.filter(({ sourceStatus }) => sourceStatus !== "resolved");
+  const determinedRoutes = campaign.determinedRoutes.flatMap((route) => {
+    const from = route.from === "start"
+      ? start
+      : route.from === "destination"
+        ? destination
+        : points[route.from];
+    const to = route.to === "start"
+      ? start
+      : route.to === "destination"
+        ? destination
+        : points[route.to];
+    return from && to ? [{ fromId: route.from, toId: route.to, from, to }] : [];
   });
 
   return (
-    <section className="map-shell" aria-label="决策旅程地图">
+    <section className="map-shell" aria-label="目标探索地图">
       <div className="map-shell__caption" aria-hidden="true">
-        <span>已走过</span>
+        <span>已确认节点</span>
         <i className="legend-mark legend-mark--trail" />
-        <span>Frontier（可探索）</span>
+        <span>待探索 issue</span>
         <i className="legend-mark legend-mark--frontier" />
         <span>当前选中</span>
         <i className="legend-mark legend-mark--selected" />
-        <span>关隘</span>
+        <span>未开放 issue</span>
         <i className="legend-mark legend-mark--gate" />
       </div>
       <div className="map-viewport" ref={viewport} data-testid="map-viewport">
@@ -118,41 +118,73 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
               </filter>
             </defs>
 
-            {trailPairs.map(({ from, to, key }) => (
-              <path key={key} className="route route--trail" d={routePath(from, to)} />
-            ))}
-            {frontierBridges.map(({ from, to, key }) => (
-              <path key={key} className="route route--current" d={routePath(from, to)} />
-            ))}
-            {campaign.routes.map((route) => {
-              const from = points[route.from];
-              const to = points[route.to];
-              if (!from || !to) {
-                return null;
-              }
-              const fromFrontier = campaign.locations.find(({ id }) => id === route.from)?.status === "frontier";
+            {determinedRoutes.map((route) => {
               const selected =
-                selection.kind === "location" &&
-                (selection.id === route.from || selection.id === route.to);
+                (selection.kind === "start" && route.fromId === "start") ||
+                (selection.kind === "destination" && route.toId === "destination") ||
+                (selection.kind === "location" &&
+                  (selection.id === route.fromId || selection.id === route.toId));
               return (
                 <path
-                  key={`${route.from}-${route.to}`}
+                  key={`${route.fromId}-${route.toId}`}
                   className={[
                     "route",
-                    `route--${route.state}`,
-                    fromFrontier ? "route--from-frontier" : "",
+                    "route--determined",
                     selected ? "route--selected" : "",
                   ].filter(Boolean).join(" ")}
-                  d={routePath(from, to)}
+                  d={routePath(route.from, route.to)}
                 />
               );
             })}
-            {destinationRoutes.map(({ from, to, key }) => (
-              <path key={key} className="route route--destination" d={routePath(from, to)} />
-            ))}
           </svg>
 
-          {campaign.locations.map((location) => {
+          <button
+            type="button"
+            className={`start-landmark${selection.kind === "start" ? " is-selected" : ""}`}
+            style={{ left: start.canvasX, top: start.canvasY }}
+            onClick={() => onSelect({ kind: "start" })}
+            aria-label="查看起点"
+            aria-pressed={selection.kind === "start"}
+            data-map-node-id="start"
+          >
+            <span className="start-landmark__marker" aria-hidden="true">◇</span>
+            <span className="start-landmark__label">起点</span>
+            <span className="start-landmark__tooltip" role="tooltip">{campaign.startingState}</span>
+          </button>
+
+          {decisionNodes.map((node) => {
+            const point = node.locationId ? points[node.locationId] : undefined;
+            if (!point) {
+              return null;
+            }
+            const isSelected = selection.kind === "location" && selection.id === node.locationId;
+            return (
+              <button
+                key={node.id}
+                type="button"
+                className={`map-node map-node--resolved map-node--${node.state}${isSelected ? " is-selected" : ""}`}
+                style={{ left: point.canvasX, top: point.canvasY }}
+                onClick={() => onSelect({ kind: "location", id: node.locationId! })}
+                aria-label={`${node.id} ${node.title}，已确认地图节点${isSelected ? "，当前选中" : ""}`}
+                aria-pressed={isSelected}
+                data-map-node-id={node.id}
+              >
+                <span className="map-node__marker">
+                  <span className="map-node__id">{node.id}</span>
+                </span>
+                {isSelected || node.state === "review_pending" ? (
+                  <span className={`map-node__state${isSelected ? " is-selected" : ""}`}>
+                    {isSelected ? "当前选中" : "待复核"}
+                  </span>
+                ) : null}
+                <span className="map-node__tooltip" role="tooltip">
+                  {node.title}
+                </span>
+              </button>
+            );
+          })}
+
+          {issues.map((location) => {
             const point = points[location.id];
             if (!point) {
               return null;
@@ -162,35 +194,34 @@ export function MapWorld({ campaign, overlay, selection, onSelect }: MapWorldPro
               <button
                 key={location.id}
                 type="button"
-                className={`map-node map-node--${location.status}${isSelected ? " is-selected" : ""}`}
+                className={`map-node issue-marker map-node--${location.status}${location.rechartState === "pending_delete" ? " issue-marker--pending-delete" : ""}${isSelected ? " is-selected" : ""}`}
                 style={{ left: point.canvasX, top: point.canvasY }}
                 onClick={() => onSelect({ kind: "location", id: location.id })}
-                aria-label={`${location.id} ${location.title}，${statusLabel(location.status)}${isSelected ? "，当前选中" : ""}`}
+                aria-label={`${location.id} ${location.title}，${statusLabel(location.status)}；这是未确认 issue，不是地图节点${isSelected ? "，当前选中" : ""}`}
                 aria-pressed={isSelected}
-                data-location-id={location.id}
+                data-issue-id={location.id}
               >
                 <span className="map-node__marker">
                   <span className="map-node__id">{location.id}</span>
                 </span>
                 {isSelected || location.status === "frontier" ? (
                   <span className={`map-node__state${isSelected ? " is-selected" : ""}`}>
-                    {isSelected ? "当前选中" : "FRONTIER"}
+                    {isSelected ? "当前选择" : location.rechartState === "pending_delete" ? "待删除" : "ISSUE"}
                   </span>
                 ) : null}
-                <span className="map-node__tooltip" role="tooltip">
-                  {location.title}
-                </span>
+                <span className="map-node__tooltip" role="tooltip">{location.title}</span>
               </button>
             );
           })}
 
           <button
             type="button"
-            className={`destination-landmark${selection.kind === "destination" ? " is-selected" : ""}`}
+            className={`destination-landmark destination-landmark--${destinationNode?.state ?? "open"}${selection.kind === "destination" ? " is-selected" : ""}`}
             style={{ left: destination.canvasX, top: destination.canvasY }}
             onClick={() => onSelect({ kind: "destination" })}
-            aria-label="查看旅程目的地"
+            aria-label="查看目的地"
             aria-pressed={selection.kind === "destination"}
+            data-map-node-id="destination"
           >
             <span className="destination-landmark__rings" aria-hidden="true" />
             <span className="destination-landmark__label">目的地</span>

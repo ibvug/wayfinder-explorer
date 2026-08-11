@@ -161,6 +161,11 @@ export function createDeterministicLayout(campaign: CampaignProjection): Campaig
   }
 
   const maxRank = Math.max(0, ...journeyRanks.values());
+  const start: LayoutPoint = {
+    x: X_START - X_SPACING,
+    y: Y_CENTER,
+    region: "start",
+  };
   const destination: LayoutPoint = {
     x: X_START + (maxRank + 2) * X_SPACING,
     y: Y_CENTER,
@@ -174,10 +179,11 @@ export function createDeterministicLayout(campaign: CampaignProjection): Campaig
 
   return {
     version: LAYOUT_VERSION,
+    start,
     locations,
     destination,
     fogEntrance,
-    bounds: boundsFor([...Object.values(locations), destination, fogEntrance]),
+    bounds: boundsFor([start, ...Object.values(locations), destination, fogEntrance]),
   };
 }
 
@@ -187,7 +193,11 @@ function mergeOverlay(
   now: string,
 ): ExplorerOverlay {
   const generated = createDeterministicLayout(campaign);
-  const occupied: LayoutPoint[] = [];
+  const persistedStart = isFinitePoint(existing?.layout.start)
+    ? { ...existing!.layout.start, region: "start" as const }
+    : undefined;
+  const start = persistedStart ?? generated.start;
+  const occupied: LayoutPoint[] = [start];
   const locations: Record<string, LayoutPoint> = {};
 
   for (const location of campaign.locations) {
@@ -223,10 +233,11 @@ function mergeOverlay(
     lastObservedSourceRevision: campaign.revision,
     layout: {
       version: LAYOUT_VERSION,
+      start,
       locations,
       destination,
       fogEntrance,
-      bounds: boundsFor([...Object.values(locations), destination, fogEntrance]),
+      bounds: boundsFor([start, ...Object.values(locations), destination, fogEntrance]),
     },
     playerFocusId,
     expeditionBindings: validBindings(existing?.expeditionBindings),

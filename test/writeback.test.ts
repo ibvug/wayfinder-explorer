@@ -22,7 +22,7 @@ import {
 } from "../src/writeback/writeback-service.ts";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
-const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "../../.scratch/personal-brain-v1");
+const PERSONAL_BRAIN_FIXTURE = path.resolve(TEST_DIRECTORY, "fixtures/personal-brain-v1");
 const ISSUE_08 = "issues/08-lock-v1-acceptance-boundary.md";
 
 test("previews and confirms 08 while unlocking only 09", async (context) => {

@@ -16,16 +16,18 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { fsyncDirectory } from "../durability.ts";
 import type { CampaignProjection, LocationType } from "../model.ts";
 import { overlayPathFor } from "../overlay.ts";
 import { inspectCampaignAs } from "../wayfinder.ts";
 import type {
   MapCreationPlanView,
   MapProposal,
-  MapProposalContent,
+  MapProposalDraftContent,
   MapTicketProposal,
 } from "./model.ts";
 import { parseMapProposalContent } from "./proposal.ts";
+import { validateSafeCommonMark } from "../expedition/proposal.ts";
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1_000;
 
@@ -366,9 +368,8 @@ interface RenderedFile {
 }
 
 function validateProposal(proposal: MapProposal): void {
-  const content: MapProposalContent = {
+  const content: MapProposalDraftContent = {
     title: proposal.title,
-    destination: proposal.destination,
     notes: proposal.notes,
     tickets: proposal.tickets,
     fog: proposal.fog,
@@ -376,6 +377,11 @@ function validateProposal(proposal: MapProposal): void {
     evidenceRefs: proposal.evidenceRefs,
   };
   parseMapProposalContent(JSON.stringify(content), new Set(proposal.evidenceRefs));
+  if (!proposal.destination.trim() || !proposal.startingState.trim() || !proposal.evidenceScope.length) {
+    throw new MapCreationConflictError("首图草案缺少已经确认的目的地、起点或取证范围。");
+  }
+  validateSafeCommonMark(proposal.destination);
+  validateSafeCommonMark(proposal.startingState);
 }
 
 function assertBlankCampaign(campaign: CampaignProjection): void {
@@ -397,6 +403,13 @@ function renderMapFiles(proposal: MapProposal): RenderedFile[] {
     "",
     proposal.destination,
     "",
+    "## Starting state",
+    "",
+    proposal.startingState,
+    "",
+    "## Evidence scope",
+    "",
+    renderBullets(proposal.evidenceScope),
     "## Notes",
     "",
     renderBullets(proposal.notes),
@@ -483,9 +496,6 @@ function assertValidFirstMap(
   }
   if (campaign.locations.length !== proposal.tickets.length || campaign.summary.resolved !== 0) {
     throw new MapCreationError(409, "首张地图草案意外改变了 ticket 数量或预先解决了 ticket。 ");
-  }
-  if (campaign.summary.frontier < 2) {
-    throw new MapCreationError(409, "首张地图必须提供至少两个当前可选的 frontier。 ");
   }
   if (rendered.length !== proposal.tickets.length + 1) {
     throw new MapCreationError(409, "首张地图没有为每个 ticket 生成唯一 issue。 ");
@@ -637,15 +647,6 @@ async function writeJournalDurably(targetPath: string, journal: CreationJournal)
   );
   await rename(temporaryPath, targetPath);
   await fsyncDirectory(path.dirname(targetPath));
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
 }
 
 function parseJournal(text: string, campaignId: string): CreationJournal {

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "activeProjectId": "campaign-882b9a1f323a",
+  "projects": [
+    {
+      "id": "campaign-66717407cdfe",
+      "name": "Personal Brain V1 决策地图",
+      "root": "/Users/huyang/Documents/ai/wayfinder-explorer/test/fixtures/personal-brain-v1",
+      "managed": false,
+      "createdAt": "2026-08-08T13:09:10.151Z",
+      "lastOpenedAt": "2026-08-08T13:09:10.156Z"
+    },
+    {
+      "id": "campaign-b1e7f8b5b0bb",
+      "name": "测试1",
+      "root": "/Users/huyang/Documents/ai/wayfinder/测试1",
+      "managed": false,
+      "createdAt": "2026-08-08T13:10:48.739Z",
+      "lastOpenedAt": "2026-08-08T13:12:01.073Z"
+    },
+    {
+      "id": "campaign-882b9a1f323a",
+      "name": "1",
+      "root": "/Users/huyang/Documents/ai/wayfinder/1",
+      "managed": false,
+      "createdAt": "2026-08-08T13:11:47.861Z",
+      "lastOpenedAt": "2026-08-08T13:12:09.191Z"
+    }
+  ]
+}
