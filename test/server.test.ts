@@ -10,6 +10,7 @@ import type { ExpeditionView } from "../src/expedition/model.ts";
 import type { ChartingService } from "../src/charting/manager.ts";
 import type { ChartingView } from "../src/charting/model.ts";
 import { CampaignRegistry } from "../src/project/registry.ts";
+import { SystemProjectTrash } from "../src/project/trash.ts";
 import { CampaignStore } from "../src/service/campaign-store.ts";
 import { createExplorerApp } from "../src/service/http-server.ts";
 import type { CampaignSnapshot } from "../src/service/model.ts";
@@ -180,6 +181,68 @@ test("serves the project library without opening a Campaign context", async (con
   assert.equal(explorer.getStore(), undefined);
   assert.equal(explorer.getExpeditions(), undefined);
   assert.equal(explorer.getCharting(), undefined);
+});
+
+test("removes a missing project record without trying to trash its absent directory", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-missing-project-remove-"));
+  const assetsRoot = await createBrowserAssets();
+  const missingProjectRoot = path.join(dataRoot, "missing-project");
+  await mkdir(missingProjectRoot);
+  const registry = await CampaignRegistry.open({
+    dataRoot,
+    initialCampaignRoot: missingProjectRoot,
+  });
+  const missingProject = registry.getActiveRecord()!;
+  await registry.deactivate();
+  await rm(missingProjectRoot, { recursive: true });
+  const systemTrash = new SystemProjectTrash({
+    platform: "darwin",
+    homeDirectory: path.join(dataRoot, "home"),
+  });
+  let trashCalls = 0;
+  const explorer = await createExplorerApp({
+    assetsRoot,
+    apiToken: "test-token",
+    publicOrigin: "http://127.0.0.1:43210",
+    projects: {
+      registry,
+      index: await registry.getIndex(),
+      open: async () => {
+        throw new Error("A missing project must not be opened during removal.");
+      },
+      trash: {
+        moveToTrash: async (root) => {
+          trashCalls += 1;
+          await systemTrash.moveToTrash(root);
+        },
+      },
+    },
+  });
+  context.after(async () => {
+    await explorer.app.close();
+    await Promise.all([
+      rm(dataRoot, { recursive: true, force: true }),
+      rm(assetsRoot, { recursive: true, force: true }),
+    ]);
+  });
+  const headers = {
+    host: "127.0.0.1:43210",
+    origin: "http://127.0.0.1:43210",
+    "x-wayfinder-token": "test-token",
+  };
+
+  const removed = await explorer.app.inject({
+    method: "DELETE",
+    url: `/api/projects/${missingProject.id}`,
+    headers,
+    payload: { snapshotVersion: 1 },
+  });
+
+  assert.equal(removed.statusCode, 200);
+  assert.equal(removed.json().snapshot.mode, "library");
+  assert.deepEqual(removed.json().snapshot.projects.projects, []);
+  assert.equal(registry.getRecord(missingProject.id), undefined);
+  assert.equal(trashCalls, 0);
 });
 
 test("watches external Markdown edits without rearranging persisted locations", async (context) => {

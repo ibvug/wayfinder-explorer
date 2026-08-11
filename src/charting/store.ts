@@ -81,9 +81,11 @@ interface StartingPointConfirmedEvent extends ChartingEventBase {
   payload: { chartingId: string; startingPoint: ConfirmedStartingPoint };
 }
 
+type LegacyMapProposal = Omit<MapProposal, "startingState" | "evidenceScope">;
+
 interface MapProposalReturnedEvent extends ChartingEventBase {
   type: "map_proposal_returned";
-  payload: { chartingId: string; proposal: MapProposal };
+  payload: { chartingId: string; proposal: MapProposal | LegacyMapProposal };
 }
 
 interface MapCreationConfirmedEvent extends ChartingEventBase {
@@ -168,6 +170,7 @@ export class ChartingStore {
   #sourceRevision: string;
   #now: () => Date;
   #records = new Map<string, ChartingRecord>();
+  #legacyProposals = new Map<string, LegacyMapProposal>();
   #appendChain: Promise<void> = Promise.resolve();
 
   private constructor(campaign: CampaignProjection, options: ChartingStoreOptions) {
@@ -551,18 +554,27 @@ export class ChartingStore {
       return;
     }
     if (event.type === "map_proposal_returned") {
-      record.proposal = structuredClone(event.payload.proposal);
-      record.state = "returned";
+      if (isMapProposal(event.payload.proposal)) {
+        record.proposal = structuredClone(event.payload.proposal);
+        this.#legacyProposals.delete(record.id);
+        record.state = "returned";
+        record.error = undefined;
+      } else {
+        record.proposal = undefined;
+        this.#legacyProposals.set(record.id, structuredClone(event.payload.proposal));
+        record.state = "awaiting_player";
+        record.error = "旧版地图草案缺少显式确认的起点；会话仍然保留，请重新建立端点并形成草案。";
+      }
       record.activeTurnId = undefined;
-      record.error = undefined;
       record.updatedAt = event.timestamp;
       return;
     }
     if (event.type === "map_creation_confirmed") {
-      if (record.proposal && !record.confirmedDestination) {
+      const proposal = record.proposal ?? this.#legacyProposals.get(record.id);
+      if (proposal && !record.confirmedDestination) {
         record.confirmedDestination = {
-          draftId: `legacy-map:${record.proposal.id}:destination`,
-          content: record.proposal.destination,
+          draftId: `legacy-map:${proposal.id}:destination`,
+          content: proposal.destination,
           confirmedAt: event.timestamp,
         };
       }
@@ -585,6 +597,7 @@ export class ChartingStore {
       record.activeTurnId = undefined;
       record.error = undefined;
       record.updatedAt = event.timestamp;
+      this.#legacyProposals.delete(record.id);
       return;
     }
     if (event.type === "rechart_requested") {
@@ -683,7 +696,7 @@ function isChartingEvent(value: unknown, campaignId: string): value is ChartingE
     return isConfirmedStartingPoint(value.payload.startingPoint);
   }
   if (value.type === "map_proposal_returned") {
-    return isRecord(value.payload.proposal);
+    return isMapProposal(value.payload.proposal) || isLegacyMapProposal(value.payload.proposal);
   }
   if (value.type === "map_creation_confirmed") {
     return typeof value.payload.planId === "string" &&
@@ -774,6 +787,43 @@ function isConfirmedStartingPoint(value: unknown): value is ConfirmedStartingPoi
   return isStartingPointDraft(value) &&
     typeof (value as Partial<ConfirmedStartingPoint>).draftId === "string" &&
     typeof (value as Partial<ConfirmedStartingPoint>).confirmedAt === "string";
+}
+
+function isMapProposal(value: unknown): value is MapProposal {
+  if (!isLegacyMapProposal(value)) {
+    return false;
+  }
+  const candidate = value as LegacyMapProposal & Partial<Pick<MapProposal, "startingState" | "evidenceScope">>;
+  return typeof candidate.startingState === "string" && isStringArray(candidate.evidenceScope);
+}
+
+function isLegacyMapProposal(value: unknown): value is LegacyMapProposal {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.destination === "string" &&
+    isStringArray(value.notes) &&
+    Array.isArray(value.tickets) && value.tickets.every(isMapTicketProposal) &&
+    isStringArray(value.fog) &&
+    isStringArray(value.outOfScope) &&
+    isStringArray(value.evidenceRefs) &&
+    typeof value.sourceRevision === "string" &&
+    typeof value.sourceTurnId === "string" &&
+    typeof value.createdAt === "string";
+}
+
+function isMapTicketProposal(value: unknown): boolean {
+  return isRecord(value) &&
+    typeof value.key === "string" &&
+    typeof value.title === "string" &&
+    (value.type === "grilling" || value.type === "prototype" ||
+      value.type === "research" || value.type === "task") &&
+    typeof value.question === "string" &&
+    isStringArray(value.blockedBy);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function isChartingState(value: unknown): value is ChartingState {

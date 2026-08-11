@@ -223,6 +223,9 @@ export class CampaignRegistry {
     options: RemoveCampaignProjectOptions = {},
   ): Promise<CampaignProjectRecord> {
     const record = this.#recordOrThrow(id);
+    const shouldMoveRootToTrash = options.moveRootToTrash
+      ? await isDirectory(record.root)
+      : false;
     const index = this.#document.projects.findIndex((candidate) => candidate.id === id);
     const previousActiveProjectId = this.#document.activeProjectId;
     this.#document.projects.splice(index, 1);
@@ -236,7 +239,7 @@ export class CampaignRegistry {
       this.#document.activeProjectId = previousActiveProjectId;
       throw cause;
     }
-    if (options.moveRootToTrash) {
+    if (options.moveRootToTrash && shouldMoveRootToTrash) {
       try {
         await options.moveRootToTrash(record.root);
       } catch (cause) {
@@ -277,6 +280,17 @@ export class CampaignRegistryError extends Error {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "CampaignRegistryError";
     this.statusCode = statusCode;
+  }
+}
+
+async function isDirectory(root: string): Promise<boolean> {
+  try {
+    return (await stat(root)).isDirectory();
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 

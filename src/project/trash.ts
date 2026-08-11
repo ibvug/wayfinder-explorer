@@ -61,8 +61,14 @@ export class SystemProjectTrash implements ProjectTrash {
   async moveToTrash(input: string): Promise<void> {
     const root = path.resolve(input);
     const metadata = await stat(root).catch((cause) => {
+      if (isMissingFileError(cause)) {
+        return undefined;
+      }
       throw new ProjectTrashError(404, "项目目录已经不存在，无法移入废纸篓。", cause);
     });
+    if (!metadata) {
+      return;
+    }
     if (!metadata.isDirectory()) {
       throw new ProjectTrashError(400, "项目路径不是文件夹，无法移入废纸篓。");
     }
@@ -134,6 +140,10 @@ function projectTrashCommand(platform: NodeJS.Platform, root: string): ProjectTr
     };
   }
   throw new ProjectTrashError(501, "当前平台尚未接入系统废纸篓。");
+}
+
+function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 export class ProjectTrashError extends Error {

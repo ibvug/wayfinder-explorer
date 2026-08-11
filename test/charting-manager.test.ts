@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -444,6 +444,85 @@ test("persists confirmations queued behind a pending rechart in confirmation ord
   const restored = await ChartingStore.open(campaign, { dataRoot });
   assert.deepEqual(restored.get(chartingId)?.rechartChanges[0]?.restoredLocationIds, ["09"]);
   await restored.close();
+});
+
+test("opens confirmed charting logs written before explicit endpoint fields", async (context) => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-legacy-map-data-"));
+  const campaignRoot = await mkdtemp(path.join(tmpdir(), "wayfinder-charting-legacy-map-campaign-"));
+  context.after(() => Promise.all([
+    rm(dataRoot, { recursive: true, force: true }),
+    rm(campaignRoot, { recursive: true, force: true }),
+  ]));
+  const campaign = await inspectCampaignAs(campaignRoot, "campaign-abcdef000002");
+  const chartingId = "charting-legacy-map";
+  const sourceRevision = campaign.revision;
+  const createdAt = "2026-08-04T12:00:00.000Z";
+  const confirmedAt = "2026-08-04T12:01:00.000Z";
+  const events = [{
+    id: "legacy-charting-started",
+    timestamp: createdAt,
+    campaignId: campaign.id,
+    sourceRevision,
+    type: "charting_started",
+    payload: { chartingId, threadId: "thread-legacy-map" },
+  }, {
+    id: "legacy-map-proposal",
+    timestamp: createdAt,
+    campaignId: campaign.id,
+    sourceRevision,
+    type: "map_proposal_returned",
+    payload: {
+      chartingId,
+      proposal: {
+        id: "proposal-legacy-map",
+        title: "旧版首图",
+        destination: "保留旧版已经确认的目的地。",
+        notes: [],
+        tickets: [{
+          key: "first-question",
+          title: "第一个问题",
+          type: "grilling",
+          question: "先确认什么？",
+          blockedBy: [],
+        }, {
+          key: "second-question",
+          title: "第二个问题",
+          type: "grilling",
+          question: "还需要确认什么？",
+          blockedBy: [],
+        }],
+        fog: [],
+        outOfScope: [],
+        evidenceRefs: ["turn:legacy-proposal"],
+        sourceRevision,
+        sourceTurnId: "turn-legacy-proposal",
+        createdAt,
+      },
+    },
+  }, {
+    id: "legacy-map-confirmed",
+    timestamp: confirmedAt,
+    campaignId: campaign.id,
+    sourceRevision,
+    type: "map_creation_confirmed",
+    payload: {
+      chartingId,
+      planId: "plan-legacy-map",
+      resultingSourceRevision: sourceRevision,
+    },
+  }];
+  const logPath = chartingPathFor(campaign.id, dataRoot);
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(logPath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+
+  const reopened = await ChartingStore.open(campaign, { dataRoot });
+  const record = reopened.get(chartingId)!;
+  assert.equal(record.state, "confirmed");
+  assert.equal(record.mapCreatedAt, confirmedAt);
+  assert.equal(record.confirmedDestination?.content, "保留旧版已经确认的目的地。");
+  assert.equal(record.confirmedStartingPoint, undefined);
+  assert.equal(record.proposal, undefined);
+  await reopened.close();
 });
 
 test("does not treat a former evidence-scope phase as endpoint confirmation", async (context) => {
